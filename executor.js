@@ -27,7 +27,7 @@ exec(`g++ ${fileName} -o ${outputName}`, (compileError, compileStdout, compileSt
 
     console.log("Compilation successful. Running binary...");
 
-    exec(`./${outputName}`, (runError, runStdout, runStderr) => {
+    exec(`${outputName}`, (runError, runStdout, runStderr) => {
         
         if (runError) {
             console.error("Runtime Error:");
