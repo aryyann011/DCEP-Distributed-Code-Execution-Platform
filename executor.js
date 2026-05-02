@@ -1,5 +1,5 @@
-const fs = require('fs');
-const { exec } = require('child_process');
+import { writeFileSync } from 'fs';
+import { exec } from 'child_process';
 
 const code = `
 #include <iostream>
@@ -14,7 +14,7 @@ const fileName = 'temp.cpp';
 const outputName = 'temp.out'; 
 
 console.log("Writing file to disk...");
-fs.writeFileSync(fileName, code);
+writeFileSync(fileName, code);
 
 console.log("Compiling...");
 exec(`g++ ${fileName} -o ${outputName}`, (compileError, compileStdout, compileStderr) => {
@@ -27,7 +27,7 @@ exec(`g++ ${fileName} -o ${outputName}`, (compileError, compileStdout, compileSt
 
     console.log("Compilation successful. Running binary...");
 
-    exec(`./${outputName}`, (runError, runStdout, runStderr) => {
+    exec(`${outputName}`, (runError, runStdout, runStderr) => {
         
         if (runError) {
             console.error("Runtime Error:");
