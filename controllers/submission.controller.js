@@ -1,53 +1,29 @@
-import { Worker } from "bullmq";
-import Docker from 'dockerode';
-import { writeFileSync } from 'fs';
-import IORedis from 'ioredis';
+import { Queue } from 'bullmq';
+import crypto from 'crypto';
 
-const connection = new IORedis({ host : '127.0.0.1', port : 6379, maxRetriesPerRequest : null });
-const docker = new Docker();
+const submissionQueue = new Queue('submissions', {
+    connection : {
+        host : '127.0.0.1',
+        port : 6379
+    }
+});
 
-console.log("Worker is online listening to submission queue");
+export const RunTheCode = async (req, res) => {
+    try {
+        const jobId = crypto.randomUUID();
+        const code = req.body.code;
 
-const worker = new Worker(
-    'submissions', 
-    async job => {
-        const code = job.data.code;
-        const jobId = job.opts.jobId;
-        
-        const fileName = `${jobId}.cpp`;
-        const outputName = `${jobId}.out`;
-        
-        writeFileSync(fileName, code);
-        console.log(`[${jobId}] Processing code:\n${code}`);
-        const currentDirectory = process.cwd();
+        await submissionQueue.add('Compile-job', { code : code }, {jobId : jobId});
 
-        console.log(`[${jobId}] Spinning up Docker Sandbox...`);
-
-        const container = await docker.createContainer({
-            Image: 'cpp-sandbox',
-            Tty: false,
-            Cmd: ['sh', '-c', `g++ ${fileName} -o ${outputName} && ./${outputName}`],
-            HostConfig: {
-                Binds: [`${currentDirectory}:/app`], 
-                Memory: 256 * 1024 * 1024,           
-                NetworkMode: 'none',                 
-            }
+        return res.status(200).json({
+            success : true,
+            status : 'QUEUED',
+            jobId : jobId,
+            message : "code successfully queued"
         });
 
-        await container.start();
-        await container.wait();
-
-        const logs = await container.logs({ stdout: true, stderr: true });
-        const output = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
-
-        console.log(`[${jobId}] Destroying Sandbox...`);
-        await container.remove();
-
-        return output;
-    },
-    { connection }
-);
-
-worker.on('failed', (job, error)=>{
-    console.log(`[${job?.opts?.jobId}] failed due to the error ${error.message}`);
-});
+    } catch (error) {
+        console.error("Queue Error:", error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+}
