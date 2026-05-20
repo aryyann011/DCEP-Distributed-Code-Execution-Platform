@@ -3,8 +3,10 @@ import Docker from 'dockerode';
 import { writeFileSync } from 'fs';
 import IORedis from 'ioredis';
 
+
 const connection = new IORedis({ host : '127.0.0.1', port : 6379, maxRetriesPerRequest : null });
 const docker = new Docker();
+const redisPublisher = new IORedis({ host: '127.0.0.1', port: 6379 });
 
 console.log("Worker is online listening to submission queue");
 
@@ -42,7 +44,12 @@ const worker = new Worker(
 
         console.log(`[${jobId}] Destroying Sandbox...`);
         await container.remove();
-
+        
+        console.log(`[${jobId}] Publishing result to Intercom...`);
+        redisPublisher.publish('job-results', JSON.stringify({
+            jobId: jobId,
+            output: output
+        }));
         return output;
     },
     { connection }

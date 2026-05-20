@@ -2,7 +2,7 @@ import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 import IORedis from 'ioredis';
-import { RunTheCode } from './submission.controller.js'; 
+import { RunTheCode } from './controllers/submission.controller.js'; 
 
 const app = express();
 app.use(express.json());
