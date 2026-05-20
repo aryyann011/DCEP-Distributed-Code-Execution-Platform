@@ -1,12 +1,51 @@
-import express from 'express'
-import codeRun from './routes/submission.route.js'
-const app = express()
-const PORT = process.env.PORT || 3000
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import IORedis from 'ioredis';
+import { RunTheCode } from './controllers/submission.controller.js'; 
 
-app.use(express.json())
+const app = express();
+app.use(express.json());
 
-app.use('/api/submission', codeRun);
+const httpServer = http.createServer(app);
 
-app.listen(PORT, () => {
-    console.log(`sever running at port ${PORT}`)
-})
+const io = new Server(httpServer, {
+    cors: { origin: "*" } 
+});
+
+const redisSubscriber = new IORedis({ host: '127.0.0.1', port: 6379 });
+
+redisSubscriber.subscribe('job-results', (err, count) => {
+    if (err) {
+        console.error("Failed to tune radio:", err);
+    } else {
+        console.log(`🎧 Gateway is listening to ${count} Redis channel(s).`);
+    }
+});
+
+redisSubscriber.on('message', (channel, message) => {
+    if (channel === 'job-results') {
+        const parsedMessage = JSON.parse(message);
+        const jobId = parsedMessage.jobId;
+        const output = parsedMessage.output;
+
+        console.log(`[${jobId}] Intercom received! Paging the user...`);
+        
+        io.to(jobId).emit('output', { output: output });
+    }
+});
+
+io.on('connection', (socket) => {
+    console.log(`🔌 New Pager Connected: ${socket.id}`);
+
+    socket.on('subscribe-to-job', (jobId) => {
+        socket.join(jobId);
+        console.log(`Socket ${socket.id} joined Room: ${jobId}`);
+    });
+});
+
+app.post('/api/submission', RunTheCode);
+
+httpServer.listen(3000, () => {
+    console.log('🚀 Gateway online on port 3000');
+});
