@@ -1,28 +1,51 @@
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
-// You still need to import your controllers and IORedis here
+import IORedis from 'ioredis';
+import { RunTheCode } from './submission.controller.js'; 
 
 const app = express();
 app.use(express.json());
 
-// --- THE BOILERPLATE ---
-// 1. Wrap the Express app inside a raw Node.js HTTP server
 const httpServer = http.createServer(app);
 
-// 2. Attach Socket.io to that raw HTTP server
 const io = new Server(httpServer, {
-    cors: { origin: "*" } // Required so Postman doesn't get blocked
+    cors: { origin: "*" } 
 });
 
-// 3. Listen for users connecting their pagers
+const redisSubscriber = new IORedis({ host: '127.0.0.1', port: 6379 });
+
+redisSubscriber.subscribe('job-results', (err, count) => {
+    if (err) {
+        console.error("Failed to tune radio:", err);
+    } else {
+        console.log(`🎧 Gateway is listening to ${count} Redis channel(s).`);
+    }
+});
+
+redisSubscriber.on('message', (channel, message) => {
+    if (channel === 'job-results') {
+        const parsedMessage = JSON.parse(message);
+        const jobId = parsedMessage.jobId;
+        const output = parsedMessage.output;
+
+        console.log(`[${jobId}] Intercom received! Paging the user...`);
+        
+        io.to(jobId).emit('output', { output: output });
+    }
+});
+
 io.on('connection', (socket) => {
     console.log(`🔌 New Pager Connected: ${socket.id}`);
-    
-    // (Your logic to assign them to a room based on jobId will go here)
+
+    socket.on('subscribe-to-job', (jobId) => {
+        socket.join(jobId);
+        console.log(`Socket ${socket.id} joined Room: ${jobId}`);
+    });
 });
 
-// 4. INSTEAD of app.listen, we start the httpServer
+app.post('/api/submission', RunTheCode);
+
 httpServer.listen(3000, () => {
     console.log('🚀 Gateway online on port 3000');
 });
