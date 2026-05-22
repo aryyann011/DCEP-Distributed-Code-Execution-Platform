@@ -1,181 +1,127 @@
-﻿# DCEP — Distributed Code Execution Platform
+# Distributed Code Execution Engine
 
-A high-performance, fault-tolerant system for executing untrusted C++ code securely using containerized sandboxing and asynchronous microservices.
+A decoupled, scalable remote code execution (RCE) API. This system processes untrusted C++ code in ephemeral, hardened Docker sandboxes. It utilizes a Redis-backed message queue to manage concurrent load and a Pub/Sub WebSocket bridge to stream execution results directly to the client, eliminating the need for synchronous HTTP polling.
 
----
+## 🛠️ Tech Stack
 
-## Overview
+![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
+![Express.js](https://img.shields.io/badge/Express.js-000000?style=for-the-badge&logo=express&logoColor=white)
+![Socket.io](https://img.shields.io/badge/Socket.io-010101?style=for-the-badge&logo=socketdotio&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![C++](https://img.shields.io/badge/C++-00599C?style=for-the-badge&logo=cplusplus&logoColor=white)
 
-DCEP is designed to safely execute user-submitted code at scale, similar to backend systems used in platforms like LeetCode or Codeforces.
+## 🏗️ System Architecture
 
----
+The architecture is split into two isolated Node.js processes communicating strictly through Redis:
 
-## Key Highlights
+1. **API Gateway (`server.js`):** Handles incoming HTTP traffic, enqueues jobs, and manages persistent WebSocket connections.
+2. **Execution Worker (`worker.js`):** Consumes jobs from the queue, provisions Docker containers, compiles/executes the payload, and enforces strict security constraints.
 
-* Executes untrusted code inside **isolated Docker containers**
-* Uses **Redis + BullMQ** for asynchronous job processing
-* Prevents API blocking under heavy load via **queue-based architecture**
-* Streams execution results in **real-time using WebSockets**
-* Enforces strict sandbox constraints (CPU, memory, network, PID limits)
+```text
+[Client] 
+   │
+   ├── (1) POST /api/submission ──► [Express API] ──► (2) Push Job ──► [Redis Queue]
+   │                                     │                                 │
+   ├── (5) Connect WebSocket             │                                 ▼
+   │                                     │                         (3) Pull Job
+   ▼                                     ▼                                 │
+[Socket.io Room] ◄── (7) Push Output ── [Redis Pub/Sub] ◄── (4) Execute ── [Node Worker]
+                                                                           │
+                                                                           ▼
+                                                                   [Docker Sandbox]
 
----
+```
 
-## Architecture
+## ⚡ Core Infrastructure
 
-`Client` → `API Gateway` → `Redis Queue` → `Worker Node` → `Docker Sandbox`
-Results are persisted in PostgreSQL and streamed via WebSockets.
+* **Asynchronous Task Queuing:** Built with BullMQ. The API Gateway never waits for code compilation. Jobs are instantly queued, preventing server memory exhaustion during high traffic spikes.
+* **Ephemeral Containerization:** Every job is executed inside a fresh, isolated `cpp-sandbox` Docker container and immediately destroyed upon completion.
+* **Real-Time Delivery:** The worker publishes execution outputs to a Redis intercom (`job-results` channel). The API Gateway listens to this channel and routes the data to the specific WebSocket room associated with the job ID.
+* **Security & Resource Constraints:**
+* **Memory Limit:** Containers are hard-capped at 256MB of RAM.
+* **Network Isolation:** Containers run with `NetworkMode: 'none'` to prevent outbound requests.
+* **Execution Timeouts:** A `Promise.race` implementation enforces a strict 2000ms CPU timeout. Rogue processes (e.g., infinite `while(true)` loops) are forcefully terminated via `SIGKILL`.
 
----
 
-## Design Decisions
-
-* **Queue-based processing** prevents API bottlenecks under load
-* **Docker over VMs** for faster startup and lower overhead
-* **Stateless API** enables horizontal scaling
-
----
-
-## Tech Stack
-
-| Layer    | Technology        |
-| :------- | :---------------- |
-| API      | Node.js + Express |
-| Queue    | Redis + BullMQ    |
-| Worker   | Node.js           |
-| Sandbox  | Docker            |
-| Database | PostgreSQL        |
-| Realtime | Socket.io         |
-
----
-
-## Components
-
-* **API Gateway:** Accepts submissions, stores initial state, pushes jobs to the queue, and handles WebSockets
-* **Worker Node:** Consumes jobs, orchestrates Docker containers, updates the DB, and publishes results
-* **Docker Sandbox:** Runs isolated code with zero network access and strict resource limits
 
 ---
 
-## Database Schema
+## 📖 API Documentation
 
-### users
+### 1. Submit Code (HTTP POST)
 
-| Field      | Type      |
-| :--------- | :-------- |
-| id         | UUID      |
-| username   | VARCHAR   |
-| created_at | TIMESTAMP |
+Enqueues the C++ code for execution.
 
-### submissions
+**Endpoint:** `POST /api/submission`
 
-| Field          | Type      |
-| :------------- | :-------- |
-| id             | UUID      |
-| user_id        | UUID      |
-| language       | VARCHAR   |
-| source_code    | TEXT      |
-| status         | VARCHAR   |
-| stdout         | TEXT      |
-| stderr         | TEXT      |
-| execution_time | FLOAT     |
-| created_at     | TIMESTAMP |
+**Headers:** `Content-Type: application/json`
 
----
-
-## API Contracts
-
-### Submit Code (`POST /api/submissions`)
-
-**Request**
+**Request Payload:**
 
 ```json
 {
-  "language": "cpp",
-  "source_code": "#include <iostream>\nint main(){return 0;}"
+  "code": "#include <iostream>\nint main() {\n  std::cout << \"Hello World\";\n  return 0;\n}"
 }
+
 ```
 
-**Response**
+**Response (200 OK):**
 
 ```json
 {
-  "submission_id": "uuid-string",
-  "status": "QUEUED"
+  "jobId": "ab2be2c4-60e7-479f-9d52-ba931913712b",
+  "status": "queued"
 }
+
 ```
 
----
+### 2. Receive Output (WebSocket)
 
-### Get Result (`GET /api/submissions/:id`)
+Connect to the Socket.io server to receive the output asynchronously.
+
+**Connection URL:** `ws://localhost:3000`
+
+**Emit Event:**
+To subscribe to a specific job result, emit the following event with the raw UUID string:
+
+* **Event Name:** `subscribe-to-job`
+* **Data:** `"ab2be2c4-60e7-479f-9d52-ba931913712b"`
+
+**Listen Event:**
+Listen for the `output` event to receive the execution result or timeout errors.
 
 ```json
 {
-  "status": "ACCEPTED",
-  "stdout": "Hello",
-  "execution_time": "12ms"
+  "output": "Hello World"
 }
+
 ```
+
+*(Note: System errors such as `Error : Execution Time Limit Exceeded(2.0s)` will also be routed through this event).*
 
 ---
 
-## Security & Sandbox Limits
+## 🚀 Local Deployment
 
-| Resource | Limit    |
-| :------- | :------- |
-| Memory   | 256 MB   |
-| CPU      | 0.5 core |
-| Network  | Disabled |
-| PIDs     | 50       |
-| Timeout  | 2000 ms  |
+**Prerequisites:** Docker and Redis must be running locally.
 
----
+**1. Start the Execution Worker:**
 
-## Folder Structure
+```bash
+node worker.js
 
 ```
-/dcep
-├── api-gateway
-├── worker-node
-├── docker-compose.yml
-├── .env
-└── README.md
-```
 
----
+**2. Start the API Gateway:**
 
-## Local Setup
-
-**Requirements:** Node.js (v18+), Docker, Redis, PostgreSQL.
-
-### 1. Environment Variables (`.env`)
+```bash
+node server.js
 
 ```
-DATABASE_URL=postgresql://user:password@localhost:5432/dcep
-REDIS_URL=redis://localhost:6379
-```
 
-### 2. Run Infrastructure
+*The system is now ready to accept HTTP traffic on port 3000 and WebSocket connections.*
 
 ```
-docker-compose up -d
-```
-
-### 3. Start API Gateway
 
 ```
-cd api-gateway
-npm install
-npm run dev
-```
-
-### 4. Start Worker Node
-
-```
-cd worker-node
-npm install
-npm run dev
-```
-
----
-
-**Author:** Aryan Mishra
