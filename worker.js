@@ -37,13 +37,36 @@ const worker = new Worker(
         });
 
         await container.start();
-        await container.wait();
+        console.log(`[${jobId}] Container started. Clock is ticking.....`)
 
-        const logs = await container.logs({ stdout: true, stderr: true });
-        const output = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
+        const timeoutPromise = new Promise((resolve, reject) => {
+            setTimeout(() => {
+                reject(new Error("TIME_LIMIT_EXCEEDED"))
+            }, 2000)
+        })
+        
+        let output = "";
+        try {
+            await Promise.race([container.wait(), timeoutPromise])
+            const logs = await container.logs({ stdout: true, stderr: true });
+            output = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
+        } catch (error) {
+            if(error.message === 'TIME_LIMIT_EXCEEDED'){
+                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED. Assassinating container...`);
 
-        console.log(`[${jobId}] Destroying Sandbox...`);
-        await container.remove();
+                await container.kill();
+
+                output = "Error : Execution Time Limit, Execeeded(2.0s)"
+            }
+            else{
+                output = "Error : Interval server Execiton failure"
+                console.error(error)
+            }
+        }
+        finally{
+            console.log(`[${jobId}] Destroying Sandbox...`);
+            await container.remove()
+        }
         
         console.log(`[${jobId}] Publishing result to Intercom...`);
         redisPublisher.publish('job-results', JSON.stringify({
