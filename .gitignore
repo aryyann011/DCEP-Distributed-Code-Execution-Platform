@@ -1,3 +1,5 @@
 node_modules/
 .env
 temp.out
+temp.cpp
+temp.exe
