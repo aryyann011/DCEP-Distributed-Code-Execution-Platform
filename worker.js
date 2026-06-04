@@ -2,11 +2,16 @@ import { Worker } from "bullmq";
 import Docker from 'dockerode';
 import { writeFileSync } from 'fs';
 import IORedis from 'ioredis';
+import * as dotenv from 'dotenv'
 
+dotenv.config()
 
-const connection = new IORedis({ host : '127.0.0.1', port : 6379, maxRetriesPerRequest : null });
+const redisHost = process.env.REDIS_HOST || '127.0.0.1';
+const redisPort = process.env.REDIS_PORT || 6379;
+
+const connection = new IORedis({ host: redisHost, port: redisPort, maxRetriesPerRequest: null });
 const docker = new Docker();
-const redisPublisher = new IORedis({ host: '127.0.0.1', port: 6379 });
+const redisPublisher = new IORedis({ host: redisHost, port: redisPort });
 
 console.log("Worker is online listening to submission queue");
 
@@ -50,17 +55,15 @@ const worker = new Worker(
             await Promise.race([container.wait(), timeoutPromise])
             const logs = await container.logs({ stdout: true, stderr: true });
             output = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
-        } catch (error) {
+        }  catch (error) {
             if(error.message === 'TIME_LIMIT_EXCEEDED'){
                 console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED. Assassinating container...`);
-
                 await container.kill();
-
-                output = "Error : Execution Time Limit, Execeeded(2.0s)"
+                output = "Error: Execution Time Limit Exceeded (2.0s)";
             }
             else{
-                output = "Error : Interval server Execiton failure"
-                console.error(error)
+                output = "Error: Internal Server Execution Failure";
+                console.error(error);
             }
         }
         finally{

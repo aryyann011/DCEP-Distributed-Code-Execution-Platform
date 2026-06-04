@@ -3,7 +3,9 @@ import http from 'http';
 import { Server } from 'socket.io';
 import IORedis from 'ioredis';
 import { RunTheCode } from './controllers/submission.controller.js'; 
+import * as dotenv from 'dotenv'
 
+dotenv.config()
 const app = express();
 app.use(express.json());
 
@@ -13,7 +15,9 @@ const io = new Server(httpServer, {
     cors: { origin: "*" } 
 });
 
-const redisSubscriber = new IORedis({ host: '127.0.0.1', port: 6379 });
+const redisHost = process.env.REDIS_HOST || '127.0.0.1';
+const redisPort = process.env.REDIS_PORT || 6379;
+const redisSubscriber = new IORedis({ host: redisHost, port: redisPort });
 
 redisSubscriber.subscribe('job-results', (err, count) => {
     if (err) {
@@ -46,6 +50,7 @@ io.on('connection', (socket) => {
 
 app.post('/api/submission', RunTheCode);
 
-httpServer.listen(3000, () => {
-    console.log('🚀 Gateway online on port 3000');
+const port = process.env.PORT || 3000;
+httpServer.listen(port, () => {
+    console.log(`🚀 Gateway online on port ${port}`);
 });

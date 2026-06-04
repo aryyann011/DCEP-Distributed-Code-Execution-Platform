@@ -12,10 +12,9 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "aryan": "^0.0.3",
     "bullmq": "^5.76.5",
     "dockerode": "^5.0.0",
-    "http": "^0.0.1-security",
+    "dotenv": "^17.4.2",
     "ioredis": "^5.10.1",
     "nodemon": "^3.1.14",
     "socket.io": "^4.8.3"
