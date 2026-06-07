@@ -1,10 +1,11 @@
 import { Worker } from "bullmq";
 import Docker from 'dockerode';
-import { writeFileSync } from 'fs';
+import { writeFileSync, unlinkSync, existsSync } from 'fs';
 import IORedis from 'ioredis';
-import * as dotenv from 'dotenv'
+import * as dotenv from 'dotenv';
+import { query } from './database/db.js'; 
 
-dotenv.config()
+dotenv.config();
 
 const redisHost = process.env.REDIS_HOST || '127.0.0.1';
 const redisPort = process.env.REDIS_PORT || 6379;
@@ -13,74 +14,185 @@ const connection = new IORedis({ host: redisHost, port: redisPort, maxRetriesPer
 const docker = new Docker();
 const redisPublisher = new IORedis({ host: redisHost, port: redisPort });
 
-console.log("Worker is online listening to submission queue");
+console.log("Worker is online listening to submission queue...");
 
-const worker = new Worker(
-    'submissions', 
-    async job => {
-        const code = job.data.code;
-        const jobId = job.opts.jobId;
+export const processSubmission = async (job) => {
+    const submissionId = job.data.submissionId;
+    const jobId = job.opts?.jobId || submissionId; 
+    console.log(`\n[${jobId}] Starting processing for Submission ID: ${submissionId}`);
+
+    const currentDirectory = process.cwd();
+    const fileName = `${submissionId}.cpp`;
+    const outputName = `${submissionId}.out`;
+    const inputName = `${submissionId}_input.txt`;
+
+    try {
+        await query(
+            `UPDATE submissions SET status = 'RUNNING', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            [submissionId]
+        );
+
+        const submissionResult = await query(
+            `SELECT id, problem_id, language, code FROM submissions WHERE id = $1;`,
+            [submissionId]
+        );
         
-        const fileName = `${jobId}.cpp`;
-        const outputName = `${jobId}.out`;
-        
+        if (submissionResult.rows.length === 0) throw new Error(`Submission ${submissionId} not found.`);
+        const { problem_id, code } = submissionResult.rows[0];
+
+        const testCasesResult = await query(
+            `SELECT id, input, expected_output FROM test_cases WHERE problem_id = $1;`, 
+            [problem_id]
+        );
+        const testCases = testCasesResult.rows;
+
+        if (testCases.length === 0) {
+            await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
+            throw new Error(`No test cases found for problem ${problem_id}.`);
+        }
+
         writeFileSync(fileName, code);
-        console.log(`[${jobId}] Processing code:\n${code}`);
-        const currentDirectory = process.cwd();
 
-        console.log(`[${jobId}] Spinning up Docker Sandbox...`);
+        let overallStatus = 'ACCEPTED';
+        let maxExecutionTime = 0;
+        let maxMemoryUsed = 0;
 
-        const container = await docker.createContainer({
+        console.log(`[${jobId}] STAGE 1: Compiling C++ binary...`);
+        const compilerContainer = await docker.createContainer({
             Image: 'cpp-sandbox',
             Tty: false,
-            Cmd: ['sh', '-c', `g++ ${fileName} -o ${outputName} && ./${outputName}`],
+            Cmd: ['g++', '/app/' + fileName, '-O2', '-o', '/app/' + outputName],
             HostConfig: {
-                Binds: [`${currentDirectory}:/app`], 
-                Memory: 256 * 1024 * 1024,           
-                NetworkMode: 'none',                 
+                Binds: [`${currentDirectory}:/app`],
+                Memory: 512 * 1024 * 1024, 
+                NetworkMode: 'none',
             }
         });
 
-        await container.start();
-        console.log(`[${jobId}] Container started. Clock is ticking.....`)
+        await compilerContainer.start();
+        
+        const compilerExit = await compilerContainer.wait();
+        
+        if (compilerExit.StatusCode !== 0) {
+            const compilerLogs = await compilerContainer.logs({ stdout: true, stderr: true });
+            const compileErrorOutput = compilerLogs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
+            
+            console.log(`[${jobId}] 🛑 COMPILE ERROR.`);
+            await compilerContainer.remove();
+            
+            await query(
+                `UPDATE submissions SET status = 'COMPILE_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, 
+                [submissionId]
+            );
+            
+            redisPublisher.publish('job-results', JSON.stringify({
+                jobId: submissionId, 
+                status: 'COMPILE_ERROR', 
+                error: compileErrorOutput
+            }));
+            
+            return; 
+        }
 
-        const timeoutPromise = new Promise((resolve, reject) => {
-            setTimeout(() => {
-                reject(new Error("TIME_LIMIT_EXCEEDED"))
-            }, 2000)
-        })
+        await compilerContainer.remove();
+        console.log(`[${jobId}] Compilation Successful. Moving to Execution phase.`);
+
         
-        let output = "";
-        try {
-            await Promise.race([container.wait(), timeoutPromise])
-            const logs = await container.logs({ stdout: true, stderr: true });
-            output = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
-        }  catch (error) {
-            if(error.message === 'TIME_LIMIT_EXCEEDED'){
-                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED. Assassinating container...`);
-                await container.kill();
-                output = "Error: Execution Time Limit Exceeded (2.0s)";
+        for (const testCase of testCases) {
+            console.log(`[${jobId}] Running Test Case: ${testCase.id}`);
+
+            writeFileSync(inputName, testCase.input);
+
+            let runStatus = 'ACCEPTED';
+            let actualOutput = '';      
+            let executionTime = 0;      
+            let memoryUsed = 0; 
+            
+            const startTime = Date.now();
+
+            const runnerContainer = await docker.createContainer({
+                Image: 'cpp-sandbox',
+                Tty: false,
+                Cmd: ['sh', '-c', `/app/${outputName} < /app/${inputName}`],
+                HostConfig: {
+                    Binds: [`${currentDirectory}:/app`], 
+                    Memory: 256 * 1024 * 1024,   
+                    NetworkMode: 'none',                 
+                }
+            });
+
+            await runnerContainer.start();
+
+            const timeoutPromise = new Promise((resolve, reject) => {
+                setTimeout(() => { reject(new Error("TIME_LIMIT_EXCEEDED")); }, 2000);
+            });
+            
+            try {
+                const runExit = await Promise.race([runnerContainer.wait(), timeoutPromise]);
+                const logs = await runnerContainer.logs({ stdout: true, stderr: true });
+                actualOutput = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
+                
+                executionTime = Date.now() - startTime;
+
+                if (runExit.StatusCode !== 0) {
+                    runStatus = 'RUNTIME_ERROR';
+                } else if (actualOutput !== testCase.expected_output.trim()) {
+                    runStatus = 'WRONG_ANSWER';
+                }
+
+            } catch (error) {
+                if (error.message === 'TIME_LIMIT_EXCEEDED') {
+                    console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED. Assassinating container...`);
+                    await runnerContainer.kill();
+                    actualOutput = "Error: Execution Time Limit Exceeded (2.0s)";
+                    runStatus = 'TIME_LIMIT_EXCEEDED';
+                    executionTime = 2000;
+                } else {
+                    actualOutput = "Error: Internal Server Execution Failure";
+                    runStatus = 'SYSTEM_ERROR';
+                    console.error(error);
+                }
+            } finally {
+                await runnerContainer.remove();
             }
-            else{
-                output = "Error: Internal Server Execution Failure";
-                console.error(error);
+
+            if (executionTime > maxExecutionTime) maxExecutionTime = executionTime;
+            
+            await query(
+                `INSERT INTO submission_results (submission_id, test_case_id, status, actual_output, execution_time, memory_used) VALUES ($1, $2, $3, $4, $5, $6);`, 
+                [submissionId, testCase.id, runStatus, actualOutput, executionTime, memoryUsed]
+            );
+
+            if (runStatus !== 'ACCEPTED' && overallStatus === 'ACCEPTED') {
+                overallStatus = runStatus; 
             }
         }
-        finally{
-            console.log(`[${jobId}] Destroying Sandbox...`);
-            await container.remove()
-        }
+
+        await query(
+            `UPDATE submissions SET status = $1, execution_time = $2, memory_used = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4;`, 
+            [overallStatus, maxExecutionTime, maxMemoryUsed, submissionId]
+        );
         
-        console.log(`[${jobId}] Publishing result to Intercom...`);
+        console.log(`[${jobId}] Finished processing. Verdict: ${overallStatus}`);
+
         redisPublisher.publish('job-results', JSON.stringify({
-            jobId: jobId,
-            output: output
+            jobId: submissionId,
+            status: overallStatus,
+            executionTime: maxExecutionTime
         }));
-        return output;
-    },
-    { connection }
-);
 
-worker.on('failed', (job, error)=>{
-    console.log(`[${job?.opts?.jobId}] failed due to the error ${error.message}`);
+    } catch (error) {
+        console.error(`[${jobId}] Error in worker processor:`, error);
+        await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
+    } finally {
+        if (existsSync(fileName)) unlinkSync(fileName);
+        if (existsSync(outputName)) unlinkSync(outputName);
+        if (existsSync(inputName)) unlinkSync(inputName);
+    }
+};
+
+const worker = new Worker('submissions', processSubmission, { connection });
+
+worker.on('failed', (job, error) => {
+    console.log(`[${job?.opts?.jobId}] Queue failure: ${error.message}`);
 });
