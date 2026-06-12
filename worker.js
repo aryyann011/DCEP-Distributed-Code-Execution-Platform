@@ -1,6 +1,8 @@
 import { Worker } from "bullmq";
 import Docker from 'dockerode';
-import { writeFileSync, unlinkSync, existsSync } from 'fs';
+import { writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
+import os from 'os';
+import path from 'path';
 import IORedis from 'ioredis';
 import * as dotenv from 'dotenv';
 import { query } from './database/db.js'; 
@@ -37,10 +39,14 @@ export const processSubmission = async (job) => {
     const jobId = job.opts?.jobId || submissionId; 
     console.log(`\n[${jobId}] Starting processing for Submission ID: ${submissionId}`);
 
-    const currentDirectory = process.cwd();
-    const fileName = `${submissionId}.cpp`;
-    const outputName = `${submissionId}.out`;
-    const inputName = `${submissionId}_input.txt`;
+    const jobDir = path.join(os.tmpdir(), `job_${submissionId}`);
+    if (!existsSync(jobDir)) {
+        mkdirSync(jobDir);
+    }
+
+    const fileName = path.join(jobDir, `main.cpp`);
+    const outputName = path.join(jobDir, `a.out`);
+    const inputName = path.join(jobDir, `input.txt`);
 
     try {
         await query(
@@ -79,7 +85,7 @@ export const processSubmission = async (job) => {
             Tty: false,
             Cmd: ['g++', '/app/' + fileName, '-O2', '-o', '/app/' + outputName],
             HostConfig: {
-                Binds: [`${currentDirectory}:/app`],
+                Binds: [`${jobDir}:/app`],
                 Memory: 512 * 1024 * 1024, 
                 NetworkMode: 'none',
                 NanoCpus: 1000000000,                  
@@ -134,7 +140,7 @@ export const processSubmission = async (job) => {
                 Tty: false,
                 Cmd: ['sh', '-c', `/app/${outputName} < /app/${inputName}`],
                 HostConfig: {
-                    Binds: [`${currentDirectory}:/app`], 
+                    Binds: [`${jobDir}:/app`], 
                     Memory: 256 * 1024 * 1024,   
                     NetworkMode: 'none',                 
                     NanoCpus: 1000000000,                  
@@ -220,9 +226,9 @@ export const processSubmission = async (job) => {
         console.error(`[${jobId}] Error in worker processor:`, error);
         await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
     } finally {
-        if (existsSync(fileName)) unlinkSync(fileName);
-        if (existsSync(outputName)) unlinkSync(outputName);
-        if (existsSync(inputName)) unlinkSync(inputName);
+        if (existsSync(jobDir)) {
+            rmSync(jobDir, { recursive: true, force: true });
+        }
     }
 };
 
