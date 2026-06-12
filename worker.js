@@ -15,6 +15,22 @@ const docker = new Docker();
 const redisPublisher = new IORedis({ host: redisHost, port: redisPort });
 
 console.log("Worker is online listening to submission queue...");
+const isCorrectOutput = (actual, expected) => {
+    const actualTokens = actual.trim().split(/\s+/);
+    const expectedTokens = expected.trim().split(/\s+/);
+
+    if (actualTokens.length !== expectedTokens.length) {
+        return false;
+    }
+
+    for (let i = 0; i < actualTokens.length; i++) {
+        if (actualTokens[i] !== expectedTokens[i]) {
+            return false;
+        }
+    }
+
+    return true;
+};
 
 export const processSubmission = async (job) => {
     const submissionId = job.data.submissionId;
@@ -152,7 +168,7 @@ export const processSubmission = async (job) => {
                     // Handle normal runtime crashes (Segfaults, non-zero exits)
                     console.log(`[${jobId}] 🛑 RUNTIME ERROR. Exit Code: ${runExit.StatusCode}`);
                     runStatus = 'RUNTIME_ERROR';
-                } else if (actualOutput !== testCase.expected_output.trim()) {
+                } else if (!isCorrectOutput(actualOutput, testCase.expected_output)) {
                     runStatus = 'WRONG_ANSWER';
                 }
 
