@@ -15,6 +15,22 @@ const docker = new Docker();
 const redisPublisher = new IORedis({ host: redisHost, port: redisPort });
 
 console.log("Worker is online listening to submission queue...");
+const isCorrectOutput = (actual, expected) => {
+    const actualTokens = actual.trim().split(/\s+/);
+    const expectedTokens = expected.trim().split(/\s+/);
+
+    if (actualTokens.length !== expectedTokens.length) {
+        return false;
+    }
+
+    for (let i = 0; i < actualTokens.length; i++) {
+        if (actualTokens[i] !== expectedTokens[i]) {
+            return false;
+        }
+    }
+
+    return true;
+};
 
 export const processSubmission = async (job) => {
     const submissionId = job.data.submissionId;
@@ -66,6 +82,9 @@ export const processSubmission = async (job) => {
                 Binds: [`${currentDirectory}:/app`],
                 Memory: 512 * 1024 * 1024, 
                 NetworkMode: 'none',
+                NanoCpus: 1000000000,                  
+                PidsLimit: 32,                         
+                SecurityOpt: ['no-new-privileges:true'] 
             }
         });
 
@@ -118,6 +137,9 @@ export const processSubmission = async (job) => {
                     Binds: [`${currentDirectory}:/app`], 
                     Memory: 256 * 1024 * 1024,   
                     NetworkMode: 'none',                 
+                    NanoCpus: 1000000000,                  
+                    PidsLimit: 32,                         
+                    SecurityOpt: ['no-new-privileges:true'] 
                 }
             });
 
@@ -129,14 +151,24 @@ export const processSubmission = async (job) => {
             
             try {
                 const runExit = await Promise.race([runnerContainer.wait(), timeoutPromise]);
+
+                const inspectData = await runnerContainer.inspect();
+                const isOomKilled = inspectData.State?.OOMKilled || false;
                 const logs = await runnerContainer.logs({ stdout: true, stderr: true });
                 actualOutput = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
                 
+
                 executionTime = Date.now() - startTime;
 
-                if (runExit.StatusCode !== 0) {
+                if (isOomKilled) {
+                    console.log(`[${jobId}] 🛑 MEMORY LIMIT EXCEEDED.`);
+                    runStatus = 'MEMORY_LIMIT_EXCEEDED';
+                    actualOutput = "Error: Memory Limit Exceeded (256MB)";
+                } else if (runExit.StatusCode !== 0) {
+                    // Handle normal runtime crashes (Segfaults, non-zero exits)
+                    console.log(`[${jobId}] 🛑 RUNTIME ERROR. Exit Code: ${runExit.StatusCode}`);
                     runStatus = 'RUNTIME_ERROR';
-                } else if (actualOutput !== testCase.expected_output.trim()) {
+                } else if (!isCorrectOutput(actualOutput, testCase.expected_output)) {
                     runStatus = 'WRONG_ANSWER';
                 }
 
@@ -165,6 +197,9 @@ export const processSubmission = async (job) => {
 
             if (runStatus !== 'ACCEPTED' && overallStatus === 'ACCEPTED') {
                 overallStatus = runStatus; 
+            }
+            if (runStatus === 'MEMORY_LIMIT_EXCEEDED') {
+                maxMemoryUsed = 256; 
             }
         }
 

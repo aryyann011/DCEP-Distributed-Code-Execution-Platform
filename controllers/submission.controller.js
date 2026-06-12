@@ -10,7 +10,7 @@ const submissionQueue = new Queue('submissions', {
 
 const router = express.Router();
 
-const RunTheCode = async (req, res) => {
+export const RunTheCode = async (req, res) => {
     const { problemId, language, code } = req.body;
 
     if (!problemId || !language || !code) {

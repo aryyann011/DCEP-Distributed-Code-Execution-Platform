@@ -2,10 +2,11 @@ import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 import IORedis from 'ioredis';
-import { RunTheCode } from './controllers/submission.controller.js'; 
-import * as dotenv from 'dotenv'
+import * as dotenv from 'dotenv';
 
-dotenv.config()
+import submissionRoutes from './routes/submission.route.js'; 
+
+dotenv.config();
 const app = express();
 app.use(express.json());
 
@@ -30,12 +31,16 @@ redisSubscriber.subscribe('job-results', (err, count) => {
 redisSubscriber.on('message', (channel, message) => {
     if (channel === 'job-results') {
         const parsedMessage = JSON.parse(message);
-        const jobId = parsedMessage.jobId;
-        const output = parsedMessage.output;
-
-        console.log(`[${jobId}] Intercom received! Paging the user...`);
         
-        io.to(jobId).emit('output', { output: output });
+        const { jobId, status, executionTime, error } = parsedMessage;
+
+        console.log(`[${jobId}] Intercom received! Verdict: ${status}`);
+        
+        io.to(jobId).emit('evaluation-complete', { 
+            status: status,
+            executionTime: executionTime,
+            error: error || null
+        });
     }
 });
 
@@ -48,7 +53,7 @@ io.on('connection', (socket) => {
     });
 });
 
-app.post('/api/submission', RunTheCode);
+app.use('/api', submissionRoutes);
 
 const port = process.env.PORT || 3000;
 httpServer.listen(port, () => {
