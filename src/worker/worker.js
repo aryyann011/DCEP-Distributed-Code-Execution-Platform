@@ -5,9 +5,10 @@ import os from 'os';
 import path from 'path';
 import IORedis from 'ioredis';
 import * as dotenv from 'dotenv';
-import { query } from './database/db.js'; 
+import { query } from "../shared/database/db";
+import { isCorrectOutput } from "./evaluators/grader.service.js";
 
-dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
 
 const redisHost = process.env.REDIS_HOST || '127.0.0.1';
 const redisPort = process.env.REDIS_PORT || 6379;
@@ -17,22 +18,6 @@ const docker = new Docker();
 const redisPublisher = new IORedis({ host: redisHost, port: redisPort });
 
 console.log("Worker is online listening to submission queue...");
-const isCorrectOutput = (actual, expected) => {
-    const actualTokens = actual.trim().split(/\s+/);
-    const expectedTokens = expected.trim().split(/\s+/);
-
-    if (actualTokens.length !== expectedTokens.length) {
-        return false;
-    }
-
-    for (let i = 0; i < actualTokens.length; i++) {
-        if (actualTokens[i] !== expectedTokens[i]) {
-            return false;
-        }
-    }
-
-    return true;
-};
 
 export const processSubmission = async (job) => {
     const submissionId = job.data.submissionId;
