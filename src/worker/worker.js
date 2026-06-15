@@ -1,21 +1,12 @@
 import { Worker } from "bullmq";
-import Docker from 'dockerode';
 import { writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
-import IORedis from 'ioredis';
-import * as dotenv from 'dotenv';
-import { query } from "../shared/database/db";
+
+import { query } from "../shared/database/db.js";
 import { isCorrectOutput } from "./evaluators/grader.service.js";
-
-dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
-
-const redisHost = process.env.REDIS_HOST || '127.0.0.1';
-const redisPort = process.env.REDIS_PORT || 6379;
-
-const connection = new IORedis({ host: redisHost, port: redisPort, maxRetriesPerRequest: null });
-const docker = new Docker();
-const redisPublisher = new IORedis({ host: redisHost, port: redisPort });
+import { connection, redisPublisher } from "../shared/queues/connection.js";
+import { compileCpp, executeCpp } from "./sandbox/docker.service.js";
 
 console.log("Worker is online listening to submission queue...");
 
@@ -29,9 +20,9 @@ export const processSubmission = async (job) => {
         mkdirSync(jobDir);
     }
 
-    const fileName = path.join(jobDir, `main.cpp`);
-    const outputName = path.join(jobDir, `a.out`);
-    const inputName = path.join(jobDir, `input.txt`);
+    const fileName = `main.cpp`;
+    const outputName = `a.out`;
+    const inputName = `input.txt`;
 
     try {
         await query(
@@ -58,37 +49,19 @@ export const processSubmission = async (job) => {
             throw new Error(`No test cases found for problem ${problem_id}.`);
         }
 
-        writeFileSync(fileName, code);
+        writeFileSync(path.join(jobDir, fileName), code);
 
         let overallStatus = 'ACCEPTED';
         let maxExecutionTime = 0;
         let maxMemoryUsed = 0;
 
         console.log(`[${jobId}] STAGE 1: Compiling C++ binary...`);
-        const compilerContainer = await docker.createContainer({
-            Image: 'cpp-sandbox',
-            Tty: false,
-            Cmd: ['g++', '/app/' + fileName, '-O2', '-o', '/app/' + outputName],
-            HostConfig: {
-                Binds: [`${jobDir}:/app`],
-                Memory: 512 * 1024 * 1024, 
-                NetworkMode: 'none',
-                NanoCpus: 1000000000,                  
-                PidsLimit: 32,                         
-                SecurityOpt: ['no-new-privileges:true'] 
-            }
-        });
-
-        await compilerContainer.start();
         
-        const compilerExit = await compilerContainer.wait();
+        // --- COMPILATION SERVICE CALL ---
+        const { statusCode, errorOutput } = await compileCpp(jobDir, fileName, outputName);
         
-        if (compilerExit.StatusCode !== 0) {
-            const compilerLogs = await compilerContainer.logs({ stdout: true, stderr: true });
-            const compileErrorOutput = compilerLogs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
-            
+        if (statusCode !== 0) {
             console.log(`[${jobId}] 🛑 COMPILE ERROR.`);
-            await compilerContainer.remove();
             
             await query(
                 `UPDATE submissions SET status = 'COMPILE_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, 
@@ -98,85 +71,47 @@ export const processSubmission = async (job) => {
             redisPublisher.publish('job-results', JSON.stringify({
                 jobId: submissionId, 
                 status: 'COMPILE_ERROR', 
-                error: compileErrorOutput
+                error: errorOutput
             }));
             
             return; 
         }
 
-        await compilerContainer.remove();
         console.log(`[${jobId}] Compilation Successful. Moving to Execution phase.`);
 
-        
         for (const testCase of testCases) {
             console.log(`[${jobId}] Running Test Case: ${testCase.id}`);
 
-            writeFileSync(inputName, testCase.input);
+            writeFileSync(path.join(jobDir, inputName), testCase.input);
 
             let runStatus = 'ACCEPTED';
-            let actualOutput = '';      
-            let executionTime = 0;      
             let memoryUsed = 0; 
             
-            const startTime = Date.now();
+            // --- EXECUTION SERVICE CALL ---
+            const { 
+                containerStatus, 
+                actualOutput: execOutput, 
+                executionTime: execTime, 
+                isOom, 
+                exitCode 
+            } = await executeCpp(jobDir, outputName, inputName);
 
-            const runnerContainer = await docker.createContainer({
-                Image: 'cpp-sandbox',
-                Tty: false,
-                Cmd: ['sh', '-c', `/app/${outputName} < /app/${inputName}`],
-                HostConfig: {
-                    Binds: [`${jobDir}:/app`], 
-                    Memory: 256 * 1024 * 1024,   
-                    NetworkMode: 'none',                 
-                    NanoCpus: 1000000000,                  
-                    PidsLimit: 32,                         
-                    SecurityOpt: ['no-new-privileges:true'] 
-                }
-            });
+            let actualOutput = execOutput;
+            let executionTime = execTime;
 
-            await runnerContainer.start();
-
-            const timeoutPromise = new Promise((resolve, reject) => {
-                setTimeout(() => { reject(new Error("TIME_LIMIT_EXCEEDED")); }, 2000);
-            });
-            
-            try {
-                const runExit = await Promise.race([runnerContainer.wait(), timeoutPromise]);
-
-                const inspectData = await runnerContainer.inspect();
-                const isOomKilled = inspectData.State?.OOMKilled || false;
-                const logs = await runnerContainer.logs({ stdout: true, stderr: true });
-                actualOutput = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
-                
-
-                executionTime = Date.now() - startTime;
-
-                if (isOomKilled) {
-                    console.log(`[${jobId}] 🛑 MEMORY LIMIT EXCEEDED.`);
-                    runStatus = 'MEMORY_LIMIT_EXCEEDED';
-                    actualOutput = "Error: Memory Limit Exceeded (256MB)";
-                } else if (runExit.StatusCode !== 0) {
-                    // Handle normal runtime crashes (Segfaults, non-zero exits)
-                    console.log(`[${jobId}] 🛑 RUNTIME ERROR. Exit Code: ${runExit.StatusCode}`);
-                    runStatus = 'RUNTIME_ERROR';
-                } else if (!isCorrectOutput(actualOutput, testCase.expected_output)) {
-                    runStatus = 'WRONG_ANSWER';
-                }
-
-            } catch (error) {
-                if (error.message === 'TIME_LIMIT_EXCEEDED') {
-                    console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED. Assassinating container...`);
-                    await runnerContainer.kill();
-                    actualOutput = "Error: Execution Time Limit Exceeded (2.0s)";
-                    runStatus = 'TIME_LIMIT_EXCEEDED';
-                    executionTime = 2000;
-                } else {
-                    actualOutput = "Error: Internal Server Execution Failure";
-                    runStatus = 'SYSTEM_ERROR';
-                    console.error(error);
-                }
-            } finally {
-                await runnerContainer.remove();
+            // --- GRADING EVALUATION ---
+            if (containerStatus === 'TIME_LIMIT_EXCEEDED') {
+                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED. Assassinating container...`);
+                runStatus = 'TIME_LIMIT_EXCEEDED';
+            } else if (isOom) {
+                console.log(`[${jobId}] 🛑 MEMORY LIMIT EXCEEDED.`);
+                runStatus = 'MEMORY_LIMIT_EXCEEDED';
+                actualOutput = "Error: Memory Limit Exceeded (256MB)";
+            } else if (exitCode !== 0) {
+                console.log(`[${jobId}] 🛑 RUNTIME ERROR. Exit Code: ${exitCode}`);
+                runStatus = 'RUNTIME_ERROR';
+            } else if (!isCorrectOutput(actualOutput, testCase.expected_output)) {
+                runStatus = 'WRONG_ANSWER';
             }
 
             if (executionTime > maxExecutionTime) maxExecutionTime = executionTime;
