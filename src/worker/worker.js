@@ -20,9 +20,9 @@ export const processSubmission = async (job) => {
         mkdirSync(jobDir);
     }
 
-    const fileName = `main.cpp`;
-    const outputName = `a.out`;
-    const inputName = `input.txt`;
+    const fileName = path.join(jobDir, `main.cpp`);
+    const outputName = path.join(jobDir, `a.out`);
+    const inputName = path.join(jobDir, `input.txt`);
 
     try {
         await query(
@@ -57,7 +57,6 @@ export const processSubmission = async (job) => {
 
         console.log(`[${jobId}] STAGE 1: Compiling C++ binary...`);
         
-        // --- COMPILATION SERVICE CALL ---
         const { statusCode, errorOutput } = await compileCpp(jobDir, fileName, outputName);
         
         if (statusCode !== 0) {
@@ -87,7 +86,6 @@ export const processSubmission = async (job) => {
             let runStatus = 'ACCEPTED';
             let memoryUsed = 0; 
             
-            // --- EXECUTION SERVICE CALL ---
             const { 
                 containerStatus, 
                 actualOutput: execOutput, 
@@ -99,7 +97,6 @@ export const processSubmission = async (job) => {
             let actualOutput = execOutput;
             let executionTime = execTime;
 
-            // --- GRADING EVALUATION ---
             if (containerStatus === 'TIME_LIMIT_EXCEEDED') {
                 console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED. Assassinating container...`);
                 runStatus = 'TIME_LIMIT_EXCEEDED';
@@ -152,8 +149,28 @@ export const processSubmission = async (job) => {
     }
 };
 
-const worker = new Worker('submissions', processSubmission, { connection });
+const worker = new Worker('submissions', processSubmission, { 
+    connection,
+    concurrency: 5,
+    lockDuration: 30000, 
+    limiter: {
+        max: 50,         
+        duration: 1000   
+    }
+});
+
+worker.on('completed', (job) => {
+    console.log(`[${job.opts?.jobId}] ✅ Removed from queue successfully.`);
+});
 
 worker.on('failed', (job, error) => {
-    console.log(`[${job?.opts?.jobId}] Queue failure: ${error.message}`);
+    console.error(`[${job?.opts?.jobId}] ❌ Queue processing failure: ${error.message}`);
+});
+
+worker.on('error', (err) => {
+    console.error('⚠️ Worker Instance Error (Redis Disconnect?):', err);
+});
+
+worker.on('stalled', (jobId) => {
+    console.warn(`[${jobId}] ⚠️ Job stalled. Node event loop may be blocked. Queue is recovering it.`);
 });
