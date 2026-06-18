@@ -1,5 +1,5 @@
 import e from "express";
-import { RunTheCode } from "../controllers/submission.controller.js";
+import { RunTheCode } from "../controller/submission.controller.js";
 
 const router = e.Router();
 
