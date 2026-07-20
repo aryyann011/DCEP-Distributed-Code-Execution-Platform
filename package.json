@@ -15,6 +15,7 @@
     "bullmq": "^5.76.5",
     "dockerode": "^5.0.0",
     "dotenv": "^17.4.2",
+    "express-rate-limit": "^8.6.0",
     "ioredis": "^5.10.1",
     "nodemon": "^3.1.14",
     "pg": "^8.21.0",
