@@ -1,5 +1,5 @@
 import express from 'express';
-import { query } from '../../shared/database/db';
+import { query } from '../../shared/database/db.js';
 import { Queue } from 'bullmq'; 
 
 const redisHost = process.env.REDIS_HOST || '127.0.0.1';
