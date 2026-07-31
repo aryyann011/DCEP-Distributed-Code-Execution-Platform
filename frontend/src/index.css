@@ -1,1 +1,71 @@
 @import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+
+  --color-background: #0A0A0A;
+  --color-surface: #111111;
+  --color-surface-alt: #191919;
+  --color-border: #222222;
+  --color-border-hover: #333333;
+
+  --color-primary: #EDEDED;
+  --color-secondary: #A0A0A0;
+  --color-muted: #636363;
+
+  --color-accent: #3B82F6;
+  --color-accent-soft: #0C1A2E;
+  --color-success: #22C55E;
+  --color-success-soft: #0B1F10;
+  --color-warning: #EAB308;
+  --color-warning-soft: #1C1604;
+  --color-error: #EF4444;
+  --color-error-soft: #1F0A0A;
+}
+
+/* ── Base ── */
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background-color: var(--color-background);
+  color: var(--color-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-hover);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}
+
+/* ── Selection ── */
+::selection {
+  background: rgba(59, 130, 246, 0.25);
+  color: var(--color-primary);
+}
+
+/* ── Monaco overrides ── */
+.monaco-editor,
+.monaco-editor .margin,
+.monaco-editor-background,
+.monaco-editor .inputarea.ime-input {
+  background-color: var(--color-surface) !important;
+}
+
+.monaco-editor .scroll-decoration {
+  box-shadow: none !important;
+}
