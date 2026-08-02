@@ -4,15 +4,16 @@ import * as dotenv from 'dotenv';
 import { initsocket } from './websocket/socket.js';
 import { initsubscriber } from './redis/subscriber.js';
 import submissionRoutes from './routes/submission.route.js'; 
+import cors from 'cors';
 
 dotenv.config();
 const app = express();
+app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
 app.use(express.json());
 
 const httpServer = http.createServer(app);
 const io = initsocket(httpServer)
 const redis = initsubscriber(io);
-
 app.use('/api', submissionRoutes);
 
 const port = process.env.PORT || 3000;

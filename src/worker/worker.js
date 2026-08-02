@@ -49,7 +49,7 @@ export const processSubmission = async (job) => {
             throw new Error(`No test cases found for problem ${problem_id}.`);
         }
 
-        writeFileSync(path.join(jobDir, fileName), code);
+        writeFileSync(fileName, code);
 
         let overallStatus = 'ACCEPTED';
         let maxExecutionTime = 0;
@@ -81,7 +81,7 @@ export const processSubmission = async (job) => {
         for (const testCase of testCases) {
             console.log(`[${jobId}] Running Test Case: ${testCase.id}`);
 
-            writeFileSync(path.join(jobDir, inputName), testCase.input);
+            writeFileSync(inputName, testCase.input);
 
             let runStatus = 'ACCEPTED';
             let memoryUsed = 0; 
