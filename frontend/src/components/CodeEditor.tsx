@@ -84,7 +84,7 @@ const defineEditorTheme = (monaco: any) => {
 function CodeEditorInner({ onSubmit, isExecuting }: CodeEditorProps) {
   const [language, setLanguage] = useState<Language>('cpp');
   const [code, setCode] = useState(DEFAULT_CODE.cpp);
-
+  const problemId = "dummy_problem1"
   const active = LANGUAGES.find((l) => l.id === language)!;
 
   const handleLanguageSwitch = (lang: Language) => {
@@ -166,7 +166,7 @@ function CodeEditorInner({ onSubmit, isExecuting }: CodeEditorProps) {
         <span className="text-[11px] text-muted">Ctrl + Enter to execute</span>
 
         <button
-          onClick={() => onSubmit(code, language)}
+          onClick={() => onSubmit(problemId, code, language)}
           disabled={isExecuting}
           className="
             flex items-center gap-2 h-[34px] px-5

@@ -1,4 +1,3 @@
-import express from 'express';
 import { query } from '../../shared/database/db.js';
 import { Queue } from 'bullmq'; 
 
@@ -7,8 +6,6 @@ const redisPort = process.env.REDIS_PORT || 6379;
 const submissionQueue = new Queue('submissions', {
     connection: { host: redisHost, port: redisPort }
 });
-
-const router = express.Router();
 
 export const RunTheCode = async (req, res) => {
     const { problemId, language, code } = req.body;
@@ -54,4 +51,19 @@ export const RunTheCode = async (req, res) => {
     }
 };
 
-export default router;
+export const GetProblem = async (req, res) => {
+    try {
+        const result = await query(
+            'SELECT id, title, time_limit, memory_limit FROM problems LIMIT 1'
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'No problems found.' });
+        }
+
+        return res.json({ success: true, problem: result.rows[0] });
+    } catch (error) {
+        console.error('Error fetching problem:', error);
+        return res.status(500).json({ success: false, error: 'Internal server error.' });
+    }
+};

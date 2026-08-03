@@ -43,13 +43,19 @@ export const processSubmission = async (job) => {
             [problem_id]
         );
         const testCases = testCasesResult.rows;
-
+        
         if (testCases.length === 0) {
             await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
             throw new Error(`No test cases found for problem ${problem_id}.`);
         }
 
         writeFileSync(fileName, code);
+
+        const problem = await query(
+            `SELECT TIME_LIMIT, MEMORY_LIMIT FROM problems WHERE id = $1`,
+            [problem_id]
+        )
+        const {time_limit, memory_limit} = problem.rows[0];
 
         let overallStatus = 'ACCEPTED';
         let maxExecutionTime = 0;
@@ -92,7 +98,7 @@ export const processSubmission = async (job) => {
                 executionTime: execTime, 
                 isOom, 
                 exitCode 
-            } = await executeCpp(jobDir, outputName, inputName);
+            } = await executeCpp(jobDir, outputName, inputName, memory_limit, time_limit);
 
             let actualOutput = execOutput;
             let executionTime = execTime;

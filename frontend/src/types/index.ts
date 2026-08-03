@@ -29,7 +29,7 @@ export interface NavbarProps {
 }
 
 export interface CodeEditorProps {
-  onSubmit: (code: string, language: Language) => void;
+  onSubmit: (problemId: string, code: string, language: Language) => void;
   isExecuting: boolean;
 }
 
