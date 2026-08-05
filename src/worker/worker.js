@@ -39,7 +39,7 @@ export const processSubmission = async (job) => {
         const { problem_id, code } = submissionResult.rows[0];
 
         const testCasesResult = await query(
-            `SELECT id, input, expected_output FROM test_cases WHERE problem_id = $1;`, 
+            `SELECT id, input, expected_output, is_hidden FROM test_cases WHERE problem_id = $1;`, 
             [problem_id]
         );
         const testCases = testCasesResult.rows;
@@ -62,11 +62,24 @@ export const processSubmission = async (job) => {
         let maxMemoryUsed = 0;
 
         console.log(`[${jobId}] STAGE 1: Compiling C++ binary...`);
-        
+
+        redisPublisher.publish('job-progress', JSON.stringify({
+            jobId: submissionId,
+            stage: 'COMPILING',
+        }));
+
+        const compileStart = Date.now();
         const { statusCode, errorOutput } = await compileCpp(jobDir, fileName, outputName);
+        const compilationTime = Date.now() - compileStart;
         
         if (statusCode !== 0) {
             console.log(`[${jobId}] 🛑 COMPILE ERROR.`);
+
+            redisPublisher.publish('job-progress', JSON.stringify({
+                jobId: submissionId,
+                stage: 'COMPILE_FAILED',
+                error: errorOutput,
+            }));
             
             await query(
                 `UPDATE submissions SET status = 'COMPILE_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, 
@@ -84,8 +97,22 @@ export const processSubmission = async (job) => {
 
         console.log(`[${jobId}] Compilation Successful. Moving to Execution phase.`);
 
-        for (const testCase of testCases) {
+        redisPublisher.publish('job-progress', JSON.stringify({
+            jobId: submissionId,
+            stage: 'COMPILED',
+            compilationTime,
+        }));
+
+        for (let i = 0; i < testCases.length; i++) {
+            const testCase = testCases[i];
             console.log(`[${jobId}] Running Test Case: ${testCase.id}`);
+
+            redisPublisher.publish('job-progress', JSON.stringify({
+                jobId: submissionId,
+                stage: 'RUNNING_TEST',
+                testIndex: i + 1,
+                totalTests: testCases.length,
+            }));
 
             writeFileSync(inputName, testCase.input);
 
@@ -123,6 +150,15 @@ export const processSubmission = async (job) => {
                 `INSERT INTO submission_results (submission_id, test_case_id, status, actual_output, execution_time, memory_used) VALUES ($1, $2, $3, $4, $5, $6);`, 
                 [submissionId, testCase.id, runStatus, actualOutput, executionTime, memoryUsed]
             );
+
+            redisPublisher.publish('job-progress', JSON.stringify({
+                jobId: submissionId,
+                stage: 'TEST_RESULT',
+                testIndex: i + 1,
+                status: runStatus,
+                executionTime,
+                actualOutput: testCase.is_hidden ? null : actualOutput,
+            }));
 
             if (runStatus !== 'ACCEPTED' && overallStatus === 'ACCEPTED') {
                 overallStatus = runStatus; 

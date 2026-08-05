@@ -84,7 +84,7 @@ const defineEditorTheme = (monaco: any) => {
 function CodeEditorInner({ onSubmit, isExecuting }: CodeEditorProps) {
   const [language, setLanguage] = useState<Language>('cpp');
   const [code, setCode] = useState(DEFAULT_CODE.cpp);
-  const problemId = "dummy_problem1"
+  
   const active = LANGUAGES.find((l) => l.id === language)!;
 
   const handleLanguageSwitch = (lang: Language) => {
