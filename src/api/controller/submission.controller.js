@@ -56,7 +56,7 @@ export const GetProblem = async (req, res) => {
         const result = await query(
             'SELECT id, title, time_limit, memory_limit FROM problems LIMIT 1'
         );
-
+        console.log(`reached here ${result}`)
         if (result.rows.length === 0) {
             return res.status(404).json({ success: false, error: 'No problems found.' });
         }

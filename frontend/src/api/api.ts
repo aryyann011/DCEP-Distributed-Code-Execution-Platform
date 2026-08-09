@@ -1,3 +1,4 @@
+
 export async function getProblem() {
     try {
         const response = await fetch('/api/problem');
@@ -14,12 +15,11 @@ export async function getProblem() {
     }
 }
 
-export async function submitCode(problemId: string, language: string, code: string, apiKey: string) {
+export async function submitCode(problemId: string, language: string, code: string) {
     const response = await fetch('/api/submit', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey,
         },
         body: JSON.stringify({ problemId, language, code }),
     });

@@ -24,12 +24,10 @@ export interface ExecutionResult {
 
 export interface NavbarProps {
   connectionStatus: ConnectionStatus;
-  apiKey: string;
-  onApiKeyChange: (key: string) => void;
 }
 
 export interface CodeEditorProps {
-  onSubmit: (problemId: string, code: string, language: Language) => void;
+  onSubmit: (code: string, language: Language) => void;
   isExecuting: boolean;
 }
 

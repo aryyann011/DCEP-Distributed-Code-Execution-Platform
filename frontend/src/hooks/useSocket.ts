@@ -6,14 +6,12 @@ export function useSocket() {
     const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
     const socketRef = useRef<Socket | null>(null);
 
-    // Callbacks to notify UI about events
     const onProgressCallback = useRef<((data: any) => void) | null>(null);
     const onCompleteCallback = useRef<((data: any) => void) | null>(null);
 
     useEffect(() => {
         setConnectionStatus('connecting');
         
-        // Connect to the proxy URL (Vite handles the forwarding to :3000)
         const socket = io('/', { path: '/socket.io' });
         socketRef.current = socket;
 
