@@ -39,28 +39,47 @@ export const processSubmission = async (job) => {
         const { problem_id, code } = submissionResult.rows[0];
 
         const testCasesResult = await query(
-            `SELECT id, input, expected_output FROM test_cases WHERE problem_id = $1;`, 
+            `SELECT id, input, expected_output, is_hidden FROM test_cases WHERE problem_id = $1;`, 
             [problem_id]
         );
         const testCases = testCasesResult.rows;
-
+        
         if (testCases.length === 0) {
             await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
             throw new Error(`No test cases found for problem ${problem_id}.`);
         }
 
-        writeFileSync(path.join(jobDir, fileName), code);
+        writeFileSync(fileName, code);
+
+        const problem = await query(
+            `SELECT TIME_LIMIT, MEMORY_LIMIT FROM problems WHERE id = $1`,
+            [problem_id]
+        )
+        const {time_limit, memory_limit} = problem.rows[0];
 
         let overallStatus = 'ACCEPTED';
         let maxExecutionTime = 0;
         let maxMemoryUsed = 0;
 
         console.log(`[${jobId}] STAGE 1: Compiling C++ binary...`);
-        
+
+        redisPublisher.publish('job-progress', JSON.stringify({
+            jobId: submissionId,
+            stage: 'COMPILING',
+        }));
+
+        const compileStart = Date.now();
         const { statusCode, errorOutput } = await compileCpp(jobDir, fileName, outputName);
+        const compilationTime = Date.now() - compileStart;
         
         if (statusCode !== 0) {
             console.log(`[${jobId}] 🛑 COMPILE ERROR.`);
+
+            redisPublisher.publish('job-progress', JSON.stringify({
+                jobId: submissionId,
+                stage: 'COMPILE_FAILED',
+                error: errorOutput,
+            }));
             
             await query(
                 `UPDATE submissions SET status = 'COMPILE_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, 
@@ -78,10 +97,24 @@ export const processSubmission = async (job) => {
 
         console.log(`[${jobId}] Compilation Successful. Moving to Execution phase.`);
 
-        for (const testCase of testCases) {
+        redisPublisher.publish('job-progress', JSON.stringify({
+            jobId: submissionId,
+            stage: 'COMPILED',
+            compilationTime,
+        }));
+
+        for (let i = 0; i < testCases.length; i++) {
+            const testCase = testCases[i];
             console.log(`[${jobId}] Running Test Case: ${testCase.id}`);
 
-            writeFileSync(path.join(jobDir, inputName), testCase.input);
+            redisPublisher.publish('job-progress', JSON.stringify({
+                jobId: submissionId,
+                stage: 'RUNNING_TEST',
+                testIndex: i + 1,
+                totalTests: testCases.length,
+            }));
+
+            writeFileSync(inputName, testCase.input);
 
             let runStatus = 'ACCEPTED';
             let memoryUsed = 0; 
@@ -92,7 +125,7 @@ export const processSubmission = async (job) => {
                 executionTime: execTime, 
                 isOom, 
                 exitCode 
-            } = await executeCpp(jobDir, outputName, inputName);
+            } = await executeCpp(jobDir, outputName, inputName, memory_limit, time_limit);
 
             let actualOutput = execOutput;
             let executionTime = execTime;
@@ -117,6 +150,15 @@ export const processSubmission = async (job) => {
                 `INSERT INTO submission_results (submission_id, test_case_id, status, actual_output, execution_time, memory_used) VALUES ($1, $2, $3, $4, $5, $6);`, 
                 [submissionId, testCase.id, runStatus, actualOutput, executionTime, memoryUsed]
             );
+
+            redisPublisher.publish('job-progress', JSON.stringify({
+                jobId: submissionId,
+                stage: 'TEST_RESULT',
+                testIndex: i + 1,
+                status: runStatus,
+                executionTime,
+                actualOutput: testCase.is_hidden ? null : actualOutput,
+            }));
 
             if (runStatus !== 'ACCEPTED' && overallStatus === 'ACCEPTED') {
                 overallStatus = runStatus; 

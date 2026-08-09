@@ -24,8 +24,6 @@ export interface ExecutionResult {
 
 export interface NavbarProps {
   connectionStatus: ConnectionStatus;
-  apiKey: string;
-  onApiKeyChange: (key: string) => void;
 }
 
 export interface CodeEditorProps {

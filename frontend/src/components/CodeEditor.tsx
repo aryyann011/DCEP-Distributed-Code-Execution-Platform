@@ -84,7 +84,7 @@ const defineEditorTheme = (monaco: any) => {
 function CodeEditorInner({ onSubmit, isExecuting }: CodeEditorProps) {
   const [language, setLanguage] = useState<Language>('cpp');
   const [code, setCode] = useState(DEFAULT_CODE.cpp);
-
+  
   const active = LANGUAGES.find((l) => l.id === language)!;
 
   const handleLanguageSwitch = (lang: Language) => {
@@ -94,9 +94,7 @@ function CodeEditorInner({ onSubmit, isExecuting }: CodeEditorProps) {
 
   return (
     <div className="flex flex-col h-full bg-surface border border-border rounded-xl overflow-hidden">
-      {/* ── Header ── */}
       <div className="flex items-center justify-between px-4 h-[44px] border-b border-border shrink-0">
-        {/* Language tabs */}
         <div className="flex items-center gap-0.5">
           {LANGUAGES.map((lang) => (
             <button
@@ -114,14 +112,12 @@ function CodeEditorInner({ onSubmit, isExecuting }: CodeEditorProps) {
           ))}
         </div>
 
-        {/* Filename */}
         <div className="flex items-center gap-1.5 text-muted">
           <FileCode2 size={13} />
           <span className="text-[11px] font-mono">{active.file}</span>
         </div>
       </div>
 
-      {/* ── Editor ── */}
       <div className="flex-1 min-h-0">
         <Editor
           height="100%"
@@ -161,7 +157,6 @@ function CodeEditorInner({ onSubmit, isExecuting }: CodeEditorProps) {
         />
       </div>
 
-      {/* ── Footer ── */}
       <div className="flex items-center justify-between px-4 h-[52px] border-t border-border shrink-0">
         <span className="text-[11px] text-muted">Ctrl + Enter to execute</span>
 

@@ -5,26 +5,29 @@ export const initsubscriber = (io) => {
     const redisPort = process.env.REDIS_PORT || 6379;
     const redisSubscriber = new IORedis({ host: redisHost, port: redisPort });
 
-    redisSubscriber.subscribe('job-results', (err, count) => {
+    redisSubscriber.subscribe('job-results', 'job-progress', (err, count) => {
         if (err) {
-            console.error("Failed to tune radio:", err);
+            console.error("Failed to subscribe:", err);
         } else {
-            console.log(`🎧 Gateway is listening to ${count} Redis channel(s).`);
+            console.log(`🎧 Gateway listening to ${count} Redis channel(s).`);
         }
     });
 
     redisSubscriber.on('message', (channel, message) => {
-        if (channel === 'job-results') {
-            const parsedMessage = JSON.parse(message);
-            
-            const { jobId, status, executionTime, error } = parsedMessage;
+        const data = JSON.parse(message);
 
-            console.log(`[${jobId}] Intercom received! Verdict: ${status}`);
-            
-            io.to(jobId).emit('evaluation-complete', { 
-                status: status,
-                executionTime: executionTime,
-                error: error || null
+        if (channel === 'job-progress') {
+            console.log(`[${data.jobId}] Progress: ${data.stage}`);
+            io.to(data.jobId).emit('job-progress', data);
+        }
+
+        if (channel === 'job-results') {
+            const { jobId, status, executionTime, error } = data;
+            console.log(`[${jobId}] Verdict: ${status}`);
+            io.to(jobId).emit('evaluation-complete', {
+                status,
+                executionTime,
+                error: error || null,
             });
         }
     });

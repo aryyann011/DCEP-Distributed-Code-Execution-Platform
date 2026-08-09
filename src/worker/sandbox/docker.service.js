@@ -33,7 +33,7 @@ export const compileCpp = async (jobDir, fileName, outputName) => {
     };
 };
 
-export const executeCpp = async (jobDir, outputName, inputName) => {
+export const executeCpp = async (jobDir, outputName, inputName, memory_limit, time_limit) => {
     const startTime = Date.now();
     const runnerContainer = await docker.createContainer({
         Image: 'cpp-sandbox',
@@ -41,7 +41,7 @@ export const executeCpp = async (jobDir, outputName, inputName) => {
         Cmd: ['sh', '-c', `/app/${outputName} < /app/${inputName}`],
         HostConfig: {
             Binds: [`${jobDir}:/app`], 
-            Memory: 256 * 1024 * 1024,   
+            Memory: memory_limit * 1024 * 1024,   
             NetworkMode: 'none',                 
             NanoCpus: 1000000000,                  
             PidsLimit: 32,                         
@@ -52,7 +52,7 @@ export const executeCpp = async (jobDir, outputName, inputName) => {
     await runnerContainer.start();
 
     const timeoutPromise = new Promise((resolve, reject) => {
-        setTimeout(() => { reject(new Error("TIME_LIMIT_EXCEEDED")); }, 2000);
+        setTimeout(() => { reject(new Error("TIME_LIMIT_EXCEEDED")); }, time_limit);
     });
     
     let actualOutput = '';      
@@ -75,9 +75,9 @@ export const executeCpp = async (jobDir, outputName, inputName) => {
     } catch (error) {
         if (error.message === 'TIME_LIMIT_EXCEEDED') {
             try { await runnerContainer.kill(); } catch (e) { /* ignore if already dead */ }
-            actualOutput = "Error: Execution Time Limit Exceeded (2.0s)";
+            actualOutput = `Error: Execution Time Limit Exceeded (${time_limit}ms)`;
             containerStatus = 'TIME_LIMIT_EXCEEDED';
-            executionTime = 2000;
+            executionTime = time_limit;
         } else {
             throw error;
         }
