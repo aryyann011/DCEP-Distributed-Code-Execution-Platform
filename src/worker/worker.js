@@ -20,9 +20,14 @@ export const processSubmission = async (job) => {
         mkdirSync(jobDir);
     }
 
-    const fileName = path.join(jobDir, `main.cpp`);
-    const outputName = path.join(jobDir, `a.out`);
-    const inputName = path.join(jobDir, `input.txt`);
+    // Full paths for host file I/O
+    const srcFilePath = path.join(jobDir, 'main.cpp');
+    const inputFilePath = path.join(jobDir, 'input.txt');
+
+    // Basenames for Docker container commands (mounted at /app/)
+    const srcName = 'main.cpp';
+    const binName = 'a.out';
+    const inputName = 'input.txt';
 
     try {
         await query(
@@ -49,7 +54,7 @@ export const processSubmission = async (job) => {
             throw new Error(`No test cases found for problem ${problem_id}.`);
         }
 
-        writeFileSync(fileName, code);
+        writeFileSync(srcFilePath, code);
 
         const problem = await query(
             `SELECT TIME_LIMIT, MEMORY_LIMIT FROM problems WHERE id = $1`,
@@ -69,7 +74,7 @@ export const processSubmission = async (job) => {
         }));
 
         const compileStart = Date.now();
-        const { statusCode, errorOutput } = await compileCpp(jobDir, fileName, outputName);
+        const { statusCode, errorOutput } = await compileCpp(jobDir, srcName, binName);
         const compilationTime = Date.now() - compileStart;
         
         if (statusCode !== 0) {
@@ -78,7 +83,7 @@ export const processSubmission = async (job) => {
             redisPublisher.publish('job-progress', JSON.stringify({
                 jobId: submissionId,
                 stage: 'COMPILE_FAILED',
-                error: errorOutput,
+                error: errorOutput.replace(/\/app\//g, '').replace(/[A-Z]:\\[^\s]*/gi, ''),
             }));
             
             await query(
@@ -89,7 +94,7 @@ export const processSubmission = async (job) => {
             redisPublisher.publish('job-results', JSON.stringify({
                 jobId: submissionId, 
                 status: 'COMPILE_ERROR', 
-                error: errorOutput
+                error: errorOutput.replace(/\/app\//g, '').replace(/[A-Z]:\\[^\s]*/gi, '')
             }));
             
             return; 
@@ -114,7 +119,7 @@ export const processSubmission = async (job) => {
                 totalTests: testCases.length,
             }));
 
-            writeFileSync(inputName, testCase.input);
+            writeFileSync(inputFilePath, testCase.input);
 
             let runStatus = 'ACCEPTED';
             let memoryUsed = 0; 
@@ -125,7 +130,7 @@ export const processSubmission = async (job) => {
                 executionTime: execTime, 
                 isOom, 
                 exitCode 
-            } = await executeCpp(jobDir, outputName, inputName, memory_limit, time_limit);
+            } = await executeCpp(jobDir, binName, inputName, memory_limit, time_limit);
 
             let actualOutput = execOutput;
             let executionTime = execTime;

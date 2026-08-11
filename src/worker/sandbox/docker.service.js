@@ -16,7 +16,9 @@ export const compileCpp = async (jobDir, fileName, outputName) => {
         }
     });
 
+   
     await compilerContainer.start();
+    console.log("compiler container starting")
     const compilerExit = await compilerContainer.wait();
     
     let errorOutput = '';

@@ -20,7 +20,28 @@ const ERROR_VERDICTS: Verdict[] = [
   'WRONG_ANSWER', 'RUNTIME_ERROR', 'COMPILE_ERROR', 'SYSTEM_ERROR',
 ];
 
-/* ── Component ── */
+
+function getLineColor(line: string): string {
+  const trimmed = line.trim();
+
+  if (trimmed.startsWith('✓') || trimmed.includes('✓'))
+    return 'text-success';
+
+  if (trimmed.startsWith('✗') || trimmed.includes('✗') || trimmed.includes('error:') || trimmed.includes('Error'))
+    return 'text-error';
+
+  if (trimmed.includes('Compiling') || trimmed.includes('warning:'))
+    return 'text-warning';
+
+  if (trimmed.startsWith('▸'))
+    return 'text-accent';
+
+  if (trimmed.startsWith('output:') || trimmed.startsWith('input:') || trimmed.startsWith('expected:') || trimmed.startsWith('received:'))
+    return 'text-muted';
+
+  return 'text-secondary';
+}
+
 
 export default function ExecutionLogs({ result }: ExecutionLogsProps) {
   const { verdict, executionTime, memory, output } = result;
@@ -84,8 +105,12 @@ export default function ExecutionLogs({ result }: ExecutionLogsProps) {
         `}
       >
         {output ? (
-          <pre className="text-[12px] font-mono text-secondary whitespace-pre-wrap leading-[1.7]">
-            {output}
+          <pre className="text-[12px] font-mono whitespace-pre-wrap leading-[1.7]">
+            {output.split('\n').map((line, i) => (
+              <span key={i} className={getLineColor(line)}>
+                {line}{'\n'}
+              </span>
+            ))}
           </pre>
         ) : (
           <div className="h-full flex items-center justify-center">
