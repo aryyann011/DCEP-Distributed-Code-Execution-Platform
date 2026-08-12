@@ -2,7 +2,7 @@ export type ConnectionStatus = 'connected' | 'disconnected' | 'connecting';
 
 export type JobStatus = 'idle' | 'queued' | 'compiling' | 'running' | 'completed' | 'error';
 
-export type Language = 'cpp' | 'python';
+export type Language = 'cpp' | 'python' | 'java';
 
 export type Verdict =
   | 'PENDING'

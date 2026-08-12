@@ -3,11 +3,11 @@ import Editor from '@monaco-editor/react';
 import { Play, Loader2, FileCode2 } from 'lucide-react';
 import type { CodeEditorProps, Language } from '../types';
 
-/* ── Language config ── */
 
 const LANGUAGES: { id: Language; label: string; monaco: string; file: string }[] = [
   { id: 'cpp',    label: 'C++',    monaco: 'cpp',    file: 'main.cpp' },
   { id: 'python', label: 'Python', monaco: 'python', file: 'main.py' },
+  { id: 'java',   label: 'Java',   monaco: 'java',   file: 'Main.java' },
 ];
 
 const DEFAULT_CODE: Record<Language, string> = {
@@ -42,16 +42,36 @@ int main() {
 nums = list(map(int, input().split()))
 target = int(input())
 
-# Solution
 for i in range(n):
     for j in range(i + 1, n):
         if nums[i] + nums[j] == target:
             print(i, j)
             break
 `,
+  java: `import java.util.Scanner;
+
+public class Main {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        int n = sc.nextInt();
+        int[] nums = new int[n];
+        for (int i = 0; i < n; i++) {
+            nums[i] = sc.nextInt();
+        }
+        int target = sc.nextInt();
+
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                if (nums[i] + nums[j] == target) {
+                    System.out.println(i + " " + j);
+                    return;
+                }
+            }
+        }
+    }
+}`,
 };
 
-/* ── Custom Monaco theme ── */
 
 const defineEditorTheme = (monaco: any) => {
   monaco.editor.defineTheme('dcep', {
@@ -78,7 +98,6 @@ const defineEditorTheme = (monaco: any) => {
   });
 };
 
-/* ── Component ── */
 
 function CodeEditorInner({ onSubmit, isExecuting }: CodeEditorProps) {
   const [language, setLanguage] = useState<Language>('cpp');
