@@ -6,7 +6,7 @@ import path from 'path';
 import { query } from "../shared/database/db.js";
 import { isCorrectOutput } from "./evaluators/grader.service.js";
 import { connection, redisPublisher } from "../shared/queues/connection.js";
-import { compileCpp, executeCpp } from "./sandbox/docker.service.js";
+import { compile, execute, LANG_CONFIG } from "./sandbox/docker.service.js";
 
 console.log("Worker is online listening to submission queue...");
 
@@ -20,9 +20,7 @@ export const processSubmission = async (job) => {
         mkdirSync(jobDir);
     }
 
-    const fileName = path.join(jobDir, `main.cpp`);
-    const outputName = path.join(jobDir, `a.out`);
-    const inputName = path.join(jobDir, `input.txt`);
+    const inputFilePath = path.join(jobDir, 'input.txt');
 
     try {
         await query(
@@ -36,7 +34,13 @@ export const processSubmission = async (job) => {
         );
         
         if (submissionResult.rows.length === 0) throw new Error(`Submission ${submissionId} not found.`);
-        const { problem_id, code } = submissionResult.rows[0];
+        const { problem_id, code, language } = submissionResult.rows[0];
+
+        const langConfig = LANG_CONFIG[language];
+        if (!langConfig) {
+            await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
+            throw new Error(`Unsupported language: ${language}`);
+        }
 
         const testCasesResult = await query(
             `SELECT id, input, expected_output, is_hidden FROM test_cases WHERE problem_id = $1;`, 
@@ -49,7 +53,8 @@ export const processSubmission = async (job) => {
             throw new Error(`No test cases found for problem ${problem_id}.`);
         }
 
-        writeFileSync(fileName, code);
+        const srcFilePath = path.join(jobDir, langConfig.srcFile);
+        writeFileSync(srcFilePath, code);
 
         const problem = await query(
             `SELECT TIME_LIMIT, MEMORY_LIMIT FROM problems WHERE id = $1`,
@@ -61,47 +66,63 @@ export const processSubmission = async (job) => {
         let maxExecutionTime = 0;
         let maxMemoryUsed = 0;
 
-        console.log(`[${jobId}] STAGE 1: Compiling C++ binary...`);
 
-        redisPublisher.publish('job-progress', JSON.stringify({
-            jobId: submissionId,
-            stage: 'COMPILING',
-        }));
-
-        const compileStart = Date.now();
-        const { statusCode, errorOutput } = await compileCpp(jobDir, fileName, outputName);
-        const compilationTime = Date.now() - compileStart;
-        
-        if (statusCode !== 0) {
-            console.log(`[${jobId}] 🛑 COMPILE ERROR.`);
+        if (langConfig.needsCompilation) {
+            console.log(`[${jobId}] STAGE 1: Compiling ${language}...`);
 
             redisPublisher.publish('job-progress', JSON.stringify({
                 jobId: submissionId,
-                stage: 'COMPILE_FAILED',
-                error: errorOutput,
+                stage: 'COMPILING',
             }));
+
+            const compileStart = Date.now();
+            const { statusCode, errorOutput } = await compile(jobDir, language);
+            const compilationTime = Date.now() - compileStart;
             
-            await query(
-                `UPDATE submissions SET status = 'COMPILE_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, 
-                [submissionId]
-            );
-            
-            redisPublisher.publish('job-results', JSON.stringify({
-                jobId: submissionId, 
-                status: 'COMPILE_ERROR', 
-                error: errorOutput
+            if (statusCode !== 0) {
+                console.log(`[${jobId}] 🛑 COMPILE ERROR.`);
+
+                const sanitizedError = errorOutput.replace(/\/app\//g, '').replace(/[A-Z]:\\[^\s]*/gi, '');
+
+                redisPublisher.publish('job-progress', JSON.stringify({
+                    jobId: submissionId,
+                    stage: 'COMPILE_FAILED',
+                    error: sanitizedError,
+                }));
+                
+                await query(
+                    `UPDATE submissions SET status = 'COMPILE_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, 
+                    [submissionId]
+                );
+                
+                redisPublisher.publish('job-results', JSON.stringify({
+                    jobId: submissionId, 
+                    status: 'COMPILE_ERROR', 
+                    error: sanitizedError
+                }));
+                
+                return; 
+            }
+
+            console.log(`[${jobId}] Compilation Successful (${compilationTime}ms).`);
+
+            redisPublisher.publish('job-progress', JSON.stringify({
+                jobId: submissionId,
+                stage: 'COMPILED',
+                compilationTime,
             }));
-            
-            return; 
+        } else {
+            console.log(`[${jobId}] ${language} is interpreted — skipping compilation.`);
+
+            redisPublisher.publish('job-progress', JSON.stringify({
+                jobId: submissionId,
+                stage: 'COMPILED',
+                compilationTime: 0,
+            }));
         }
 
-        console.log(`[${jobId}] Compilation Successful. Moving to Execution phase.`);
 
-        redisPublisher.publish('job-progress', JSON.stringify({
-            jobId: submissionId,
-            stage: 'COMPILED',
-            compilationTime,
-        }));
+        console.log(`[${jobId}] STAGE 2: Running test cases...`);
 
         for (let i = 0; i < testCases.length; i++) {
             const testCase = testCases[i];
@@ -114,7 +135,7 @@ export const processSubmission = async (job) => {
                 totalTests: testCases.length,
             }));
 
-            writeFileSync(inputName, testCase.input);
+            writeFileSync(inputFilePath, testCase.input);
 
             let runStatus = 'ACCEPTED';
             let memoryUsed = 0; 
@@ -125,18 +146,18 @@ export const processSubmission = async (job) => {
                 executionTime: execTime, 
                 isOom, 
                 exitCode 
-            } = await executeCpp(jobDir, outputName, inputName, memory_limit, time_limit);
+            } = await execute(jobDir, language, memory_limit, time_limit);
 
             let actualOutput = execOutput;
             let executionTime = execTime;
 
             if (containerStatus === 'TIME_LIMIT_EXCEEDED') {
-                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED. Assassinating container...`);
+                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED.`);
                 runStatus = 'TIME_LIMIT_EXCEEDED';
             } else if (isOom) {
                 console.log(`[${jobId}] 🛑 MEMORY LIMIT EXCEEDED.`);
                 runStatus = 'MEMORY_LIMIT_EXCEEDED';
-                actualOutput = "Error: Memory Limit Exceeded (256MB)";
+                actualOutput = `Error: Memory Limit Exceeded (${memory_limit}MB)`;
             } else if (exitCode !== 0) {
                 console.log(`[${jobId}] 🛑 RUNTIME ERROR. Exit Code: ${exitCode}`);
                 runStatus = 'RUNTIME_ERROR';
@@ -164,7 +185,7 @@ export const processSubmission = async (job) => {
                 overallStatus = runStatus; 
             }
             if (runStatus === 'MEMORY_LIMIT_EXCEEDED') {
-                maxMemoryUsed = 256; 
+                maxMemoryUsed = memory_limit; 
             }
         }
 
