@@ -37,4 +37,5 @@ export interface TopologyMapProps {
 
 export interface ExecutionLogsProps {
   result: ExecutionResult;
+  isExecuting: boolean;
 }

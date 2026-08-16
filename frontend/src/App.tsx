@@ -130,7 +130,7 @@ export default function App() {
 
         <div className="col-span-4 grid grid-rows-[2fr_3fr] gap-3 min-h-0">
           <TopologyMap jobStatus={jobStatus} />
-          <ExecutionLogs result={result} />
+          <ExecutionLogs result={result} isExecuting={isExecuting} />
         </div>
       </main>
     </div>

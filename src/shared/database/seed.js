@@ -14,7 +14,7 @@ async function seed() {
         
         const problemRes = await query(`
             INSERT INTO problems (title, description, time_limit, memory_limit) 
-            VALUES ('Two Sum', 'Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.', 2000, 256)
+            VALUES ('Two Sum', 'Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.', 3000, 256)
             RETURNING id;
         `);
         const problemId = problemRes.rows[0].id;
