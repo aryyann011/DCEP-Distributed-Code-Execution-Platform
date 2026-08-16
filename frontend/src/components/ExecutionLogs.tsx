@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { Clock, HardDrive, Terminal } from 'lucide-react';
 import type { ExecutionLogsProps, Verdict } from '../types';
 
@@ -42,8 +42,19 @@ function getLineColor(line: string): string {
   return 'text-secondary';
 }
 
+function LoadingDots() {
+  const [dots, setDots] = useState('');
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDots(d => d.length >= 3 ? '' : d + '.');
+    }, 300);
+    return () => clearInterval(interval);
+  }, []);
+  return <span className="inline-block w-4 text-left">{dots}</span>;
+}
 
-export default function ExecutionLogs({ result }: ExecutionLogsProps) {
+
+export default function ExecutionLogs({ result, isExecuting }: ExecutionLogsProps) {
   const { verdict, executionTime, memory, output } = result;
   const style = VERDICT_STYLE[verdict];
   const isIdle = verdict === 'PENDING';
@@ -106,11 +117,25 @@ export default function ExecutionLogs({ result }: ExecutionLogsProps) {
       >
         {output ? (
           <pre className="text-[12px] font-mono whitespace-pre-wrap leading-[1.7]">
-            {output.split('\n').map((line, i) => (
-              <span key={i} className={getLineColor(line)}>
-                {line}{'\n'}
-              </span>
-            ))}
+            {output.split('\n').map((line, i, arr) => {
+              const isLast = i === arr.length - 1;
+              const hasDots = line.endsWith('...');
+              
+              if (isExecuting && isLast) {
+                const baseText = hasDots ? line.slice(0, -3) : line;
+                return (
+                  <span key={i} className={getLineColor(line)}>
+                    {baseText}<LoadingDots />{'\n'}
+                  </span>
+                );
+              }
+
+              return (
+                <span key={i} className={getLineColor(line)}>
+                  {line}{'\n'}
+                </span>
+              );
+            })}
           </pre>
         ) : (
           <div className="h-full flex items-center justify-center">

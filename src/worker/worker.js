@@ -152,8 +152,12 @@ export const processSubmission = async (job) => {
             let executionTime = execTime;
 
             if (containerStatus === 'TIME_LIMIT_EXCEEDED') {
-                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED.`);
+                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED (Hard timeout).`);
                 runStatus = 'TIME_LIMIT_EXCEEDED';
+            } else if (executionTime > time_limit) {
+                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED (Exact time: ${executionTime}ms).`);
+                runStatus = 'TIME_LIMIT_EXCEEDED';
+                actualOutput = `Error: Execution Time Limit Exceeded (${time_limit}ms)`;
             } else if (isOom) {
                 console.log(`[${jobId}] 🛑 MEMORY LIMIT EXCEEDED.`);
                 runStatus = 'MEMORY_LIMIT_EXCEEDED';

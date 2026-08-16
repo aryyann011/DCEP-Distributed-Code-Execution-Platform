@@ -75,7 +75,6 @@ export const compile = async (jobDir, language) => {
 export const execute = async (jobDir, language, memory_limit, time_limit) => {
     const config = LANG_CONFIG[language];
     const inputName = 'input.txt';
-    const startTime = Date.now();
 
     const runnerContainer = await docker.createContainer({
         Image: SANDBOX_IMAGE,
@@ -90,8 +89,9 @@ export const execute = async (jobDir, language, memory_limit, time_limit) => {
 
     await runnerContainer.start();
 
+    // Hard timeout includes a 2-second grace period for Docker overhead
     const timeoutPromise = new Promise((resolve, reject) => {
-        setTimeout(() => { reject(new Error("TIME_LIMIT_EXCEEDED")); }, time_limit);
+        setTimeout(() => { reject(new Error("TIME_LIMIT_EXCEEDED")); }, time_limit + 2000);
     });
 
     let actualOutput = '';
@@ -109,7 +109,11 @@ export const execute = async (jobDir, language, memory_limit, time_limit) => {
 
         const logs = await runnerContainer.logs({ stdout: true, stderr: true });
         actualOutput = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
-        executionTime = Date.now() - startTime;
+        
+        // Calculate exact execution time from container state to ignore Docker overhead
+        const startedAt = new Date(inspectData.State.StartedAt).getTime();
+        const finishedAt = new Date(inspectData.State.FinishedAt).getTime();
+        executionTime = Math.max(0, finishedAt - startedAt);
 
     } catch (error) {
         if (error.message === 'TIME_LIMIT_EXCEEDED') {
