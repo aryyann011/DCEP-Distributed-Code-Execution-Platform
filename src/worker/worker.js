@@ -1,218 +1,139 @@
 import { Worker } from "bullmq";
-import { writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
-import os from 'os';
-import path from 'path';
-
-import { query } from "../shared/database/db.js";
-import { isCorrectOutput } from "./evaluators/grader.service.js";
-import { connection, redisPublisher } from "../shared/queues/connection.js";
+import { connection } from "../shared/queues/connection.js";
 import { compile, execute, LANG_CONFIG } from "./sandbox/docker.service.js";
+import { isCorrectOutput } from "./evaluators/grader.service.js";
 
-console.log("Worker is online listening to submission queue...");
+import { logger } from "../shared/utils/logger.js";
+import * as fsHelper from "./fs-helper.js";
+import * as dbHelper from "./db-helper.js";
+import * as telemetry from "./telmetry.js";
+
+logger.info("Worker is online listening to submission queue...");
 
 export const processSubmission = async (job) => {
     const submissionId = job.data.submissionId;
     const jobId = job.opts?.jobId || submissionId; 
-    console.log(`\n[${jobId}] Starting processing for Submission ID: ${submissionId}`);
+    
+    logger.info({ jobId, submissionId }, "Starting processing for Submission");
 
-    const jobDir = path.join(os.tmpdir(), `job_${submissionId}`);
-    if (!existsSync(jobDir)) {
-        mkdirSync(jobDir);
-    }
-
-    const inputFilePath = path.join(jobDir, 'input.txt');
+    const jobDir = fsHelper.setupJobDirectory(submissionId);
 
     try {
-        await query(
-            `UPDATE submissions SET status = 'RUNNING', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-            [submissionId]
-        );
+        await dbHelper.updateSubmissionStatus(submissionId, 'RUNNING');
 
-        const submissionResult = await query(
-            `SELECT id, problem_id, language, code FROM submissions WHERE id = $1;`,
-            [submissionId]
-        );
-        
-        if (submissionResult.rows.length === 0) throw new Error(`Submission ${submissionId} not found.`);
-        const { problem_id, code, language } = submissionResult.rows[0];
+        const submission = await dbHelper.fetchSubmission(submissionId);
+        if (!submission) throw new Error(`Submission ${submissionId} not found.`);
+        const { problem_id, code, language } = submission;
 
         const langConfig = LANG_CONFIG[language];
         if (!langConfig) {
-            await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
+            await dbHelper.updateSubmissionStatus(submissionId, 'SYSTEM_ERROR');
             throw new Error(`Unsupported language: ${language}`);
         }
 
-        const testCasesResult = await query(
-            `SELECT id, input, expected_output, is_hidden FROM test_cases WHERE problem_id = $1;`, 
-            [problem_id]
-        );
-        const testCases = testCasesResult.rows;
-        
+        const testCases = await dbHelper.fetchTestCases(problem_id);
         if (testCases.length === 0) {
-            await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
+            await dbHelper.updateSubmissionStatus(submissionId, 'SYSTEM_ERROR');
             throw new Error(`No test cases found for problem ${problem_id}.`);
         }
 
-        const srcFilePath = path.join(jobDir, langConfig.srcFile);
-        writeFileSync(srcFilePath, code);
+        const limits = await dbHelper.fetchProblemLimits(problem_id);
+        const { time_limit, memory_limit } = limits;
 
-        const problem = await query(
-            `SELECT TIME_LIMIT, MEMORY_LIMIT FROM problems WHERE id = $1`,
-            [problem_id]
-        )
-        const {time_limit, memory_limit} = problem.rows[0];
+        fsHelper.writeSourceCode(jobDir, langConfig.srcFile, code);
 
         let overallStatus = 'ACCEPTED';
         let maxExecutionTime = 0;
         let maxMemoryUsed = 0;
 
-
         if (langConfig.needsCompilation) {
-            console.log(`[${jobId}] STAGE 1: Compiling ${language}...`);
-
-            redisPublisher.publish('job-progress', JSON.stringify({
-                jobId: submissionId,
-                stage: 'COMPILING',
-            }));
+            logger.info({ jobId, language, stage: 'COMPILING' }, 'Compiling source code');
+            telemetry.broadcastProgress(submissionId, { stage: 'COMPILING' });
 
             const compileStart = Date.now();
             const { statusCode, errorOutput } = await compile(jobDir, language);
             const compilationTime = Date.now() - compileStart;
             
             if (statusCode !== 0) {
-                console.log(`[${jobId}] 🛑 COMPILE ERROR.`);
-
+                logger.error({ jobId, stage: 'COMPILE_ERROR' }, 'Compilation failed');
                 const sanitizedError = errorOutput.replace(/\/app\//g, '').replace(/[A-Z]:\\[^\s]*/gi, '');
 
-                redisPublisher.publish('job-progress', JSON.stringify({
-                    jobId: submissionId,
-                    stage: 'COMPILE_FAILED',
-                    error: sanitizedError,
-                }));
-                
-                await query(
-                    `UPDATE submissions SET status = 'COMPILE_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, 
-                    [submissionId]
-                );
-                
-                redisPublisher.publish('job-results', JSON.stringify({
-                    jobId: submissionId, 
-                    status: 'COMPILE_ERROR', 
-                    error: sanitizedError
-                }));
-                
+                telemetry.broadcastProgress(submissionId, { stage: 'COMPILE_FAILED', error: sanitizedError });
+                await dbHelper.updateSubmissionStatus(submissionId, 'COMPILE_ERROR');
+                telemetry.broadcastResult(submissionId, { status: 'COMPILE_ERROR', error: sanitizedError });
                 return; 
             }
 
-            console.log(`[${jobId}] Compilation Successful (${compilationTime}ms).`);
-
-            redisPublisher.publish('job-progress', JSON.stringify({
-                jobId: submissionId,
-                stage: 'COMPILED',
-                compilationTime,
-            }));
+            logger.info({ jobId, compilationTime }, 'Compilation Successful');
+            telemetry.broadcastProgress(submissionId, { stage: 'COMPILED', compilationTime });
         } else {
-            console.log(`[${jobId}] ${language} is interpreted — skipping compilation.`);
-
-            redisPublisher.publish('job-progress', JSON.stringify({
-                jobId: submissionId,
-                stage: 'COMPILED',
-                compilationTime: 0,
-            }));
+            logger.info({ jobId, language }, 'Interpreted language — skipping compilation');
+            telemetry.broadcastProgress(submissionId, { stage: 'COMPILED', compilationTime: 0 });
         }
 
-
-        console.log(`[${jobId}] STAGE 2: Running test cases...`);
+        logger.info({ jobId, totalTests: testCases.length }, 'Running test cases');
 
         for (let i = 0; i < testCases.length; i++) {
             const testCase = testCases[i];
-            console.log(`[${jobId}] Running Test Case: ${testCase.id}`);
+            logger.info({ jobId, testCaseId: testCase.id }, `Running Test Case ${i + 1}/${testCases.length}`);
 
-            redisPublisher.publish('job-progress', JSON.stringify({
-                jobId: submissionId,
+            telemetry.broadcastProgress(submissionId, {
                 stage: 'RUNNING_TEST',
                 testIndex: i + 1,
                 totalTests: testCases.length,
-            }));
+            });
 
-            writeFileSync(inputFilePath, testCase.input);
+            fsHelper.writeTestCaseInput(jobDir, testCase.input);
 
             let runStatus = 'ACCEPTED';
             let memoryUsed = 0; 
             
-            const { 
-                containerStatus, 
-                actualOutput: execOutput, 
-                executionTime: execTime, 
-                isOom, 
-                exitCode 
-            } = await execute(jobDir, language, memory_limit, time_limit);
+            const { containerStatus, actualOutput: execOutput, executionTime: execTime, isOom, exitCode } = await execute(jobDir, language, memory_limit, time_limit);
 
             let actualOutput = execOutput;
             let executionTime = execTime;
 
-            if (containerStatus === 'TIME_LIMIT_EXCEEDED') {
-                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED (Hard timeout).`);
+            if (containerStatus === 'TIME_LIMIT_EXCEEDED' || executionTime > time_limit) {
+                logger.warn({ jobId }, 'Time Limit Exceeded');
                 runStatus = 'TIME_LIMIT_EXCEEDED';
-            } else if (executionTime > time_limit) {
-                console.log(`[${jobId}] 🛑 TIME LIMIT EXCEEDED (Exact time: ${executionTime}ms).`);
-                runStatus = 'TIME_LIMIT_EXCEEDED';
-                actualOutput = `Error: Execution Time Limit Exceeded (${time_limit}ms)`;
+                if (executionTime > time_limit) actualOutput = `Error: Execution Time Limit Exceeded (${time_limit}ms)`;
             } else if (isOom) {
-                console.log(`[${jobId}] 🛑 MEMORY LIMIT EXCEEDED.`);
+                logger.warn({ jobId }, 'Memory Limit Exceeded');
                 runStatus = 'MEMORY_LIMIT_EXCEEDED';
                 actualOutput = `Error: Memory Limit Exceeded (${memory_limit}MB)`;
             } else if (exitCode !== 0) {
-                console.log(`[${jobId}] 🛑 RUNTIME ERROR. Exit Code: ${exitCode}`);
+                logger.warn({ jobId, exitCode }, 'Runtime Error');
                 runStatus = 'RUNTIME_ERROR';
             } else if (!isCorrectOutput(actualOutput, testCase.expected_output)) {
                 runStatus = 'WRONG_ANSWER';
             }
 
             if (executionTime > maxExecutionTime) maxExecutionTime = executionTime;
+            if (runStatus === 'MEMORY_LIMIT_EXCEEDED') maxMemoryUsed = memory_limit; 
             
-            await query(
-                `INSERT INTO submission_results (submission_id, test_case_id, status, actual_output, execution_time, memory_used) VALUES ($1, $2, $3, $4, $5, $6);`, 
-                [submissionId, testCase.id, runStatus, actualOutput, executionTime, memoryUsed]
-            );
+            await dbHelper.saveTestResult(submissionId, testCase.id, runStatus, actualOutput, executionTime, memoryUsed);
 
-            redisPublisher.publish('job-progress', JSON.stringify({
-                jobId: submissionId,
+            telemetry.broadcastProgress(submissionId, {
                 stage: 'TEST_RESULT',
                 testIndex: i + 1,
                 status: runStatus,
                 executionTime,
                 actualOutput: testCase.is_hidden ? null : actualOutput,
-            }));
+            });
 
-            if (runStatus !== 'ACCEPTED' && overallStatus === 'ACCEPTED') {
-                overallStatus = runStatus; 
-            }
-            if (runStatus === 'MEMORY_LIMIT_EXCEEDED') {
-                maxMemoryUsed = memory_limit; 
-            }
+            if (runStatus !== 'ACCEPTED' && overallStatus === 'ACCEPTED') overallStatus = runStatus; 
         }
 
-        await query(
-            `UPDATE submissions SET status = $1, execution_time = $2, memory_used = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4;`, 
-            [overallStatus, maxExecutionTime, maxMemoryUsed, submissionId]
-        );
-        
-        console.log(`[${jobId}] Finished processing. Verdict: ${overallStatus}`);
+        await dbHelper.finalizeSubmission(submissionId, overallStatus, maxExecutionTime, maxMemoryUsed);
+        logger.info({ jobId, overallStatus }, 'Finished processing submission');
 
-        redisPublisher.publish('job-results', JSON.stringify({
-            jobId: submissionId,
-            status: overallStatus,
-            executionTime: maxExecutionTime
-        }));
+        telemetry.broadcastResult(submissionId, { status: overallStatus, executionTime: maxExecutionTime });
 
     } catch (error) {
-        console.error(`[${jobId}] Error in worker processor:`, error);
-        await query(`UPDATE submissions SET status = 'SYSTEM_ERROR', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [submissionId]);
+        logger.error({ jobId, err: error }, 'Error in worker processor');
+        await dbHelper.updateSubmissionStatus(submissionId, 'SYSTEM_ERROR');
     } finally {
-        if (existsSync(jobDir)) {
-            rmSync(jobDir, { recursive: true, force: true });
-        }
+        fsHelper.cleanupJobDirectory(jobDir);
     }
 };
 
@@ -220,24 +141,21 @@ const worker = new Worker('submissions', processSubmission, {
     connection,
     concurrency: 5,
     lockDuration: 30000, 
-    limiter: {
-        max: 50,         
-        duration: 1000   
-    }
+    limiter: { max: 50, duration: 1000 }
 });
 
 worker.on('completed', (job) => {
-    console.log(`[${job.opts?.jobId}] ✅ Removed from queue successfully.`);
+    logger.info({ jobId: job.opts?.jobId }, 'Removed from queue successfully');
 });
 
 worker.on('failed', (job, error) => {
-    console.error(`[${job?.opts?.jobId}] ❌ Queue processing failure: ${error.message}`);
+    logger.error({ jobId: job?.opts?.jobId, err: error }, 'Queue processing failure');
 });
 
 worker.on('error', (err) => {
-    console.error('⚠️ Worker Instance Error (Redis Disconnect?):', err);
+    logger.error({ err }, 'Worker Instance Error (Redis Disconnect?)');
 });
 
 worker.on('stalled', (jobId) => {
-    console.warn(`[${jobId}] ⚠️ Job stalled. Node event loop may be blocked. Queue is recovering it.`);
+    logger.warn({ jobId }, 'Job stalled. Node event loop may be blocked. Queue recovering it.');
 });
