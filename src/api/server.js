@@ -10,12 +10,26 @@ import { query } from '../shared/database/db.js';
 import { connection as redisConnection } from '../shared/queues/connection.js';
 import { logger } from '../shared/utils/logger.js';
 import { RedisConnection } from 'bullmq';
+import { setupSwagger } from './shared/utils/swagger.js';
 
 dotenv.config();
 const app = express();
 app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
 app.use(express.json());
+setupSwagger(app);
 
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Checks the health of the API, Database, and Redis.
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: System is healthy
+ *       503:
+ *         description: Database or Redis is offline
+ */
 app.get("/health", async(req, res) => {
     try {
         await query("select 1")
