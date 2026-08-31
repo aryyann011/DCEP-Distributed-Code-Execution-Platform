@@ -10,7 +10,7 @@ import { query } from '../shared/database/db.js';
 import { connection as redisConnection } from '../shared/queues/connection.js';
 import { logger } from '../shared/utils/logger.js';
 import { RedisConnection } from 'bullmq';
-import { setupSwagger } from './shared/utils/swagger.js';
+import { setupSwagger } from '../shared/utils/swagger.js';
 
 dotenv.config();
 const app = express();
@@ -20,15 +20,38 @@ setupSwagger(app);
 
 /**
  * @swagger
- * /health:
- *   get:
- *     summary: Checks the health of the API, Database, and Redis.
- *     tags: [System]
+ * /api/submit:
+ *   post:
+ *     summary: Submit code to the execution engine
+ *     tags: [Submissions]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - language
+ *               - code
+ *               - problem_id
+ *             properties:
+ *               language:
+ *                 type: string
+ *                 description: The programming language (cpp, python, java)
+ *                 example: "cpp"
+ *               code:
+ *                 type: string
+ *                 description: The raw source code to execute
+ *                 example: "#include <iostream>\nusing namespace std;\nint main() {\n  cout << \"Hello World\";\n  return 0;\n}"
+ *               problem_id:
+ *                 type: string
+ *                 description: The UUID of the problem being solved
+ *                 example: "123e4567-e89b-12d3-a456-426614174000"
  *     responses:
  *       200:
- *         description: System is healthy
- *       503:
- *         description: Database or Redis is offline
+ *         description: Submission successfully added to the BullMQ queue
+ *       400:
+ *         description: Invalid JSON payload (Caught by Zod)
  */
 app.get("/health", async(req, res) => {
     try {
