@@ -33,7 +33,7 @@ setupSwagger(app);
  *             required:
  *               - language
  *               - code
- *               - problem_id
+ *               - problemId
  *             properties:
  *               language:
  *                 type: string
@@ -43,7 +43,7 @@ setupSwagger(app);
  *                 type: string
  *                 description: The raw source code to execute
  *                 example: "#include <iostream>\nusing namespace std;\nint main() {\n  cout << \"Hello World\";\n  return 0;\n}"
- *               problem_id:
+ *               problemId:
  *                 type: string
  *                 description: The UUID of the problem being solved
  *                 example: "123e4567-e89b-12d3-a456-426614174000"
