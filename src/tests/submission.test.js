@@ -31,7 +31,7 @@ describe('POST /api/submit (Validation Checks)', () => {
         expect(response.status).toBe(400);
         expect(response.body.success).toBe(false);
         expect(response.body.errors).toHaveProperty('language');
-        expect(response.body.errors.language[0]).toBe('unsupported language must be cpp, python, java');
+        expect(response.body.errors.language[0]).toBe('Invalid option: expected one of "cpp"|"python"|"java"');
     });
 
     it('returns 400 if the code string is empty', async () => {
