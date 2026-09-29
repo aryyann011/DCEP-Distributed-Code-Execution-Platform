@@ -1,0 +1,73 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    # GitHub Actions will spin up these temporary services alongside your Node environment
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: dcep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Provide environment variables that our server expects
+    env:
+      DATABASE_URL: postgres://postgres:password@localhost:5432/dcep
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      PORT: 3000
+
+    steps:
+      # Step 1: Download your source code into the GitHub Actions runner
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Step 2: Install Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Step 3: Install all dependencies (express, jest, zod, etc.)
+      - name: Install Dependencies
+        run: npm ci
+
+      # Step 4: Start the API server in the background and wait for it to be healthy
+      - name: Start API Server
+        run: |
+          npm start &
+          npx wait-on http://localhost:3000/health --timeout 30000
+
+      # Step 5: Run the Jest test suite!
+      - name: Run Tests
+        run: npm test
