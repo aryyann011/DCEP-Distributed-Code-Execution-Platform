@@ -13,7 +13,7 @@ async function seed() {
         console.log("Database is empty. Seeding 'Two Sum'...");
         
         const problemRes = await query(`
-            INSERT INTO problems (title, description, time_limit, memory_limit) 
+            INSERT INTO problems (title, description, difficulty, time_limit, memory_limit)
             VALUES ('Two Sum', 'Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.', 'EASY', 3000, 256)
             RETURNING id;
         `);
