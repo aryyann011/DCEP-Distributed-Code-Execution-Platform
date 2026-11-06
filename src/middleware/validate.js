@@ -4,9 +4,7 @@ const submissionSchema = z.object({
     problemId: z.string().uuid("Invalid Problem Id format"),
 
     language: z.enum(["cpp", "python", "java"], {
-        errorMap: () => ({
-            message: "unsupported language must be cpp, python, java"
-        })
+        error: "unsupported language must be cpp, python, java"
     }),
 
     code: z.string().min(1, "Code cannot be empty")

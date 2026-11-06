@@ -2,18 +2,17 @@ name: CI Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
 
-    # GitHub Actions will spin up these temporary services alongside your Node environment
+    # Fresh Postgres + Redis started inside Docker on the runner,
+    # before any of our steps execute. Health checks gate on readiness.
     services:
       postgres:
         image: postgres:15
@@ -39,7 +38,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    # Provide environment variables that our server expects
     env:
       DATABASE_URL: postgres://postgres:password@localhost:5432/dcep
       REDIS_HOST: localhost
@@ -47,27 +45,45 @@ jobs:
       PORT: 3000
 
     steps:
-      # Step 1: Download your source code into the GitHub Actions runner
-      - name: Checkout Code
+      # 1. Download the repo into the runner VM
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Install Node.js
+      # 2. Install Node 20 + cache node_modules keyed on package-lock.json
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
-      # Step 3: Install all dependencies (express, jest, zod, etc.)
-      - name: Install Dependencies
+      # 3. Exact installs from the lockfile (reproducible, unlike npm install)
+      - name: Install dependencies
         run: npm ci
 
-      # Step 4: Start the API server in the background and wait for it to be healthy
-      - name: Start API Server
-        run: |
-          npm start &
-          npx wait-on http://localhost:3000/health --timeout 30000
+      # 4. Fresh VM = empty Postgres. Build schema, then seed one problem
+      #    (queue.test.js needs a real problems row for the FK).
+      - name: Apply database schema
+        run: node src/shared/database/setup-db.js
 
-      # Step 5: Run the Jest test suite!
-      - name: Run Tests
+      - name: Seed database
+        run: node src/shared/database/seed.js
+
+      # 5. Start the API server in the background (raw node, no nodemon),
+      #    wait for /health to return 200 before testing.
+      - name: Start API server
+        run: |
+          node src/api/server.js &
+          for i in $(seq 1 30); do
+            if curl -f http://localhost:3000/health > /dev/null 2>&1; then
+              echo "Server is healthy"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Server failed to become healthy"; exit 1
+            fi
+            sleep 1
+          done
+
+      # 6. The actual gate. Fails the whole workflow on any test failure.
+      - name: Run tests
         run: npm test
