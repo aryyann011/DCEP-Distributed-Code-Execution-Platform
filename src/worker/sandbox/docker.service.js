@@ -1,5 +1,25 @@
 import Docker from 'dockerode';
+import path from 'path';
+
 const docker = new Docker();
+
+// When the worker runs as a container, jobDir lives at /app/jobs inside it,
+// which the Docker daemon cannot see as a bind source. In that mode
+// SANDBOX_HOST_JOBS_DIR provides the host-side directory the daemon CAN see,
+// and we substitute only the basename. On a host-run worker it is unset and
+// the original behaviour (bind jobDir directly) is preserved.
+const resolveBindSource = (jobDir) => {
+    // Container mode: JOBS_DIR is set AND SANDBOX_HOST_JOBS_DIR (a compose
+    // interpolation from .env) names the host-side directory the daemon sees.
+    if (process.env.JOBS_DIR && process.env.SANDBOX_HOST_JOBS_DIR) {
+        return `${process.env.SANDBOX_HOST_JOBS_DIR}/${path.basename(jobDir)}`;
+    }
+
+    // Host mode: bind jobDir directly (existing behaviour).
+    return jobDir;
+};
+
+const Binds = (jobDir) => [`${resolveBindSource(jobDir)}:/app`];
 
 const SANDBOX_IMAGE = 'code-sandbox';
 
@@ -36,6 +56,38 @@ const LANG_CONFIG = {
 };
 
 
+// Captures container logs as text. Docker streams logs as multiplexed
+// 8-byte-framed chunks (1 byte stream type + 4 byte big-endian size header
+// per frame); we demux them so stdout/stderr arrive as plain text.
+const containerLogs = async (container) => {
+    const stream = await container.logs({ follow: true, stdout: true, stderr: true });
+    const chunks = [];
+
+    await new Promise((resolve, reject) => {
+        stream.on('data', (chunk) => chunks.push(chunk));
+        stream.on('end', resolve);
+        stream.on('error', reject);
+    });
+
+    const buf = Buffer.concat(chunks.map((c) => Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    let text = '';
+
+    let offset = 0;
+    while (offset + 8 <= buf.length) {
+        const frameSize = buf.readUInt32BE(offset + 4);
+        const frameStart = offset + 8;
+        const frameEnd = Math.min(frameStart + frameSize, buf.length);
+        text += buf.slice(frameStart, frameEnd).toString('utf-8');
+        offset = frameEnd;
+    }
+
+    if (!text && buf.length > 0) {
+        text = buf.toString('utf-8');
+    }
+
+    return text;
+};
+
 export const compile = async (jobDir, language) => {
     const config = LANG_CONFIG[language];
 
@@ -48,7 +100,7 @@ export const compile = async (jobDir, language) => {
         Tty: false,
         Cmd: config.compileCmd(config.srcFile, config.binFile),
         HostConfig: {
-            Binds: [`${jobDir}:/app`],
+            Binds: Binds(jobDir),
             Memory: 512 * 1024 * 1024,
             ...SANDBOX_SECURITY,
         }
@@ -59,8 +111,8 @@ export const compile = async (jobDir, language) => {
 
     let errorOutput = '';
     if (compilerExit.StatusCode !== 0) {
-        const compilerLogs = await compilerContainer.logs({ stdout: true, stderr: true });
-        errorOutput = compilerLogs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
+        errorOutput = await containerLogs(compilerContainer);
+        errorOutput = errorOutput.replace(/[^\x20-\x7E\n]/g, '').trim();
     }
 
     await compilerContainer.remove();
@@ -81,7 +133,7 @@ export const execute = async (jobDir, language, memory_limit, time_limit) => {
         Tty: false,
         Cmd: config.executeCmd(config.binFile, inputName),
         HostConfig: {
-            Binds: [`${jobDir}:/app`],
+            Binds: Binds(jobDir),
             Memory: memory_limit * 1024 * 1024,
             ...SANDBOX_SECURITY,
         }
@@ -107,8 +159,8 @@ export const execute = async (jobDir, language, memory_limit, time_limit) => {
         isOom = inspectData.State?.OOMKilled || false;
         exitCode = runExit.StatusCode;
 
-        const logs = await runnerContainer.logs({ stdout: true, stderr: true });
-        actualOutput = logs.toString('utf-8').replace(/[^\x20-\x7E\n]/g, '').trim();
+        const rawLogs = await containerLogs(runnerContainer);
+        actualOutput = rawLogs.replace(/[^\x20-\x7E\n]/g, '').trim();
         
         // Calculate exact execution time from container state to ignore Docker overhead
         const startedAt = new Date(inspectData.State.StartedAt).getTime();
