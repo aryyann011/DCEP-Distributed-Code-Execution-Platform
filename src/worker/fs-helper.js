@@ -3,7 +3,8 @@ import os from 'os';
 import path from 'path';
 
 export const setupJobDirectory = (submissionId) => {
-    const jobDir = path.join(os.tmpdir(), `job_${submissionId}`);
+    const baseDir = process.env.JOBS_DIR || os.tmpdir();
+    const jobDir = path.join(baseDir, `job_${submissionId}`);
     if (!existsSync(jobDir)) {
         mkdirSync(jobDir);
     }

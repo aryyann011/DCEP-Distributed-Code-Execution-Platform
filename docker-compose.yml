@@ -1,6 +1,91 @@
-version: '3.8'
 services:
+  # ---------- Infra ----------
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: dcep
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dcep"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
-    image: redis:alpine
+    image: redis:7
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- The execution sandbox image ----------
+  # Builds the code-sandbox image the worker spawns per-submission
+  # (Dockerfile = alpine + g++/python3/openjdk). Runs "true" and exits,
+  # purely so the image exists before the worker starts.
+  code-sandbox-image:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: code-sandbox
+    entrypoint: ["true"]
+    restart: "no"
+
+  # ---------- App ----------
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: dcep-api
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://postgres:password@postgres:5432/dcep
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      PORT: "3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  worker:
+    image: dcep-api
+    command: ["node", "src/worker/worker.js"]
+    environment:
+      DATABASE_URL: postgres://postgres:password@postgres:5432/dcep
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      JOBS_DIR: /app/jobs
+      SANDBOX_HOST_JOBS_DIR: ${SANDBOX_HOST_JOBS_DIR:?Set SANDBOX_HOST_JOBS_DIR in .env (absolute host path of ./jobs)}
+    volumes:
+      # Sibling access: worker needs the host's Docker to spawn sandbox containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Job files shared with sandbox containers via the host path
+      - ./jobs:/app/jobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      code-sandbox-image:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
